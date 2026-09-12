@@ -3,8 +3,7 @@ import streamlit as st
 import time
 from datetime import datetime
 
-from pose_detection import detect_pose
-from activity_detection import detect_activity
+from pose_detection import analyze_frame
 
 
 def show_camera():
@@ -75,6 +74,10 @@ def show_camera():
     progress_placeholder = st.empty()
     detection_placeholder = st.empty()
 
+    st.subheader("👤 Person Position & Justification")
+
+    analysis_placeholder = st.empty()
+
     st.subheader("Live Activity Stream")
 
     stream_placeholder = st.empty()
@@ -141,6 +144,7 @@ def show_camera():
         st.success("🟢 Mobile camera connected!")
 
     last_log_time = 0
+    frame_count = 0
 
     while st.session_state.camera_running:
 
@@ -153,9 +157,30 @@ def show_camera():
             st.error("❌ Camera frame receive nahi ho raha.")
             break
 
-        detected_frame, keypoints = detect_pose(frame)
+        # ----------------------------------------------
+        # Naya full analysis (position + activity +
+        # justification per person)
+        # ----------------------------------------------
 
-        activity, confidence = detect_activity(keypoints)
+        detected_frame, persons = analyze_frame(frame)
+
+        frame_count += 1
+
+        # ----------------------------------------------
+        # Metrics (pehle person ke basis par)
+        # ----------------------------------------------
+
+        if persons:
+
+            main_person = persons[0]
+
+            activity = main_person["activity"]
+            confidence = main_person["confidence"]
+
+        else:
+
+            activity = "No Person"
+            confidence = 0.0
 
         activity_metric.metric(
             "Current Activity",
@@ -179,26 +204,80 @@ def show_camera():
 
         progress_placeholder.progress(progress_value)
 
+        # ----------------------------------------------
+        # Detection banner
+        # ----------------------------------------------
+
+        person_word = (
+            "person" if len(persons) == 1 else "persons"
+        )
+
         if activity == "Walking":
             detection_placeholder.success(
-                f"🟢 Walking activity detected — "
-                f"{confidence:.1f}% confidence"
+                f"🟢 Walking detected — {confidence:.1f}% confidence "
+                f"({len(persons)} {person_word} in frame)"
             )
         elif activity == "Standing":
             detection_placeholder.success(
-                f"🟢 Standing activity detected — "
-                f"{confidence:.1f}% confidence"
+                f"🟢 Standing detected — {confidence:.1f}% confidence "
+                f"({len(persons)} {person_word} in frame)"
             )
         elif activity == "Sitting":
             detection_placeholder.success(
-                f"🟢 Sitting activity detected — "
-                f"{confidence:.1f}% confidence"
+                f"🟢 Sitting detected — {confidence:.1f}% confidence "
+                f"({len(persons)} {person_word} in frame)"
+            )
+        elif activity == "No Person":
+            detection_placeholder.warning(
+                "🟡 Frame mein koi person detect nahi hua."
             )
         else:
             detection_placeholder.warning(
-                f"🟡 {activity} — "
-                f"{confidence:.1f}% confidence"
+                f"🟡 {activity} — {confidence:.1f}% confidence "
+                f"({len(persons)} {person_word} in frame)"
             )
+
+        # ----------------------------------------------
+        # Person Position & Justification section
+        # ----------------------------------------------
+
+        if persons:
+
+            analysis_blocks = []
+
+            for p in persons:
+
+                reasons_text = "\n".join(
+                    f"   • {reason}"
+                    for reason in p["justification"]
+                )
+
+                pos = p["position"]
+
+                analysis_blocks.append(
+                    f"**👤 Person ID {p['track_id']}** — "
+                    f"`{p['activity']}` ({p['confidence']:.0f}%)\n\n"
+                    f"- **Position:** {pos['description']} "
+                    f"(center: {pos['center_pixel'][0]:.0f}, "
+                    f"{pos['center_pixel'][1]:.0f})\n"
+                    f"- **Justification:**\n\n"
+                    f"{reasons_text}"
+                )
+
+            analysis_placeholder.markdown(
+                "\n\n---\n\n".join(analysis_blocks)
+            )
+
+        else:
+
+            analysis_placeholder.info(
+                "Person position aur justification yahan dikhega "
+                "jab koi person frame mein aayega."
+            )
+
+        # ----------------------------------------------
+        # History logging (1 second interval)
+        # ----------------------------------------------
 
         current_time = time.time()
 
@@ -238,7 +317,8 @@ def show_camera():
             log_entry = (
                 f"🟢 {timestamp} — "
                 f"{activity} — "
-                f"{confidence:.1f}%"
+                f"{confidence:.1f}% "
+                f"({len(persons)} {person_word})"
             )
 
             st.session_state.activity_stream.insert(
@@ -259,6 +339,10 @@ def show_camera():
                     st.session_state.activity_stream
                 )
             )
+
+        # ----------------------------------------------
+        # Frame display (BGR -> RGB)
+        # ----------------------------------------------
 
         detected_frame = cv2.cvtColor(
             detected_frame,
