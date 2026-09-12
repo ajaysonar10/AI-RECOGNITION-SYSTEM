@@ -1,5 +1,6 @@
 import streamlit as st
 from datetime import datetime
+from camera import show_camera
 
 # ============================================================
 # PAGE CONFIGURATION
@@ -135,6 +136,14 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
+
+# ============================================================
+# REAL AI ACTIVITY DATA
+# ============================================================
+
+if "activity_history" not in st.session_state:
+    st.session_state.activity_history = []
 
 
 # ============================================================
@@ -449,59 +458,10 @@ elif page == "📡 Live Monitor":
         "Real-time human activity monitoring"
     )
 
-    st.divider()
+    show_camera()
 
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-
-        st.metric(
-            "Current Activity",
-            "Walking"
-        )
-
-    with col2:
-
-        st.metric(
-            "Confidence",
-            "98.4%"
-        )
-
-    with col3:
-
-        st.metric(
-            "System",
-            "ONLINE"
-        )
-
-
-    st.subheader("Current AI Detection")
-
-    st.progress(0.984)
-
-    st.success(
-        "🟢 Walking activity detected"
-    )
-
-
-    st.subheader("Live Activity Stream")
-
-    st.write(
-        "🟢 21:26:32  —  Walking  —  98.4%"
-    )
-
-    st.write(
-        "🟢 21:26:27  —  Standing  —  96.7%"
-    )
-
-    st.write(
-        "🟢 21:26:21  —  Walking  —  97.9%"
-    )
-
-    st.write(
-        "🟢 21:25:58  —  Sitting  —  94.2%"
-    )
+    
+    
 
 
 # ============================================================
@@ -518,82 +478,69 @@ elif page == "🕒 Activity History":
 
     st.divider()
 
-
-    history_data = {
-        "Date": [
-            "11 Sep 2026",
-            "11 Sep 2026",
-            "11 Sep 2026",
-            "11 Sep 2026",
-            "11 Sep 2026"
-        ],
-
-        "Time": [
-            "21:26:32",
-            "21:26:27",
-            "21:26:21",
-            "21:25:58",
-            "21:25:42"
-        ],
-
-        "Activity": [
-            "Walking",
-            "Standing",
-            "Walking",
-            "Sitting",
-            "Working"
-        ],
-
-        "Confidence": [
-            "98.4%",
-            "96.7%",
-            "97.9%",
-            "94.2%",
-            "91.8%"
-        ],
-
-        "Status": [
-            "Normal",
-            "Normal",
-            "Normal",
-            "Normal",
-            "Normal"
-        ]
-    }
-
-
-    st.dataframe(
-        history_data,
-        use_container_width=True,
-        hide_index=True
+    # Real detections collected by the AI camera
+    history = st.session_state.get(
+        "activity_history",
+        []
     )
 
+    if history:
 
-    st.divider()
+        history_rows = []
 
-    st.subheader("Activity Summary")
+        for item in history:
+            history_rows.append(
+                {
+                    "Date": item["date"],
+                    "Time": item["time"],
+                    "Activity": item["activity"],
+                    "Confidence": f'{item["confidence"]:.1f}%',
+                    "Status": item["status"]
+                }
+            )
 
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-
-        st.metric(
-            "Total Activities",
-            "1,284"
+        st.dataframe(
+            history_rows,
+            use_container_width=True,
+            hide_index=True
         )
 
-    with col2:
+        st.divider()
 
-        st.metric(
-            "Normal Activities",
-            "1,281"
+        st.subheader("Activity Summary")
+
+        total = len(history)
+        normal = sum(
+            1 for item in history
+            if item["status"] == "Normal"
         )
+        anomalies = total - normal
 
-    with col3:
+        col1, col2, col3 = st.columns(3)
 
-        st.metric(
-            "Anomalies",
-            "03"
+        with col1:
+            st.metric(
+                "Total Activities",
+                total
+            )
+
+        with col2:
+            st.metric(
+                "Normal Activities",
+                normal
+            )
+
+        with col3:
+            st.metric(
+                "Anomalies",
+                anomalies
+            )
+
+    else:
+
+        st.info(
+            "No AI activity detections yet. "
+            "Start the camera from Live Monitor."
         )
 
 
@@ -611,50 +558,81 @@ elif page == "📊 Analytics":
 
     st.divider()
 
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-
-        st.metric(
-            "Total Activities",
-            "1,284"
-        )
-
-    with col2:
-
-        st.metric(
-            "Average Confidence",
-            "95.7%"
-        )
-
-    with col3:
-
-        st.metric(
-            "Anomalies",
-            "03"
-        )
-
-
-    st.subheader("Activity Distribution")
-
-    chart_data = {
-        "Walking": 35,
-        "Standing": 28,
-        "Sitting": 20,
-        "Working": 17
-    }
-
-    st.bar_chart(chart_data)
-
-
-    st.subheader("AI Model Performance")
-
-    st.progress(0.957)
-
-    st.caption(
-        "Average model confidence: 95.7%"
+    history = st.session_state.get(
+        "activity_history",
+        []
     )
+
+    if history:
+
+        total = len(history)
+
+        average_confidence = (
+            sum(
+                item["confidence"]
+                for item in history
+            ) / total
+        )
+
+        anomalies = sum(
+            1
+            for item in history
+            if item["status"] != "Normal"
+        )
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.metric(
+                "Total Activities",
+                total
+            )
+
+        with col2:
+            st.metric(
+                "Average Confidence",
+                f"{average_confidence:.1f}%"
+            )
+
+        with col3:
+            st.metric(
+                "Anomalies",
+                anomalies
+            )
+
+        st.subheader("Activity Distribution")
+
+        activity_counts = {}
+
+        for item in history:
+            activity = item["activity"]
+            activity_counts[activity] = (
+                activity_counts.get(activity, 0) + 1
+            )
+
+        st.bar_chart(activity_counts)
+
+        st.subheader("AI Model Performance")
+
+        confidence_value = max(
+            0.0,
+            min(1.0, average_confidence / 100)
+        )
+
+        st.progress(confidence_value)
+
+        st.caption(
+            f"Average model confidence: "
+            f"{average_confidence:.1f}%"
+        )
+
+    else:
+
+        st.info(
+            "No AI data available yet. "
+            "Start the camera from Live Monitor "
+            "to generate analytics."
+        )
 
 
 # ============================================================
