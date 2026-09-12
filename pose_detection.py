@@ -381,7 +381,7 @@ def _analyze_activity(keypoints, track):
     # ------------------------------------------------
 
     if keypoints is None or len(keypoints) < 17:
-        return "Unknown", 0.0, ["Body keypoints detect nahi hue"]
+        return "Unknown", 0.0, ["No body keypoints detected"]
 
     left_shoulder = keypoints[5]
     right_shoulder = keypoints[6]
@@ -402,12 +402,12 @@ def _analyze_activity(keypoints, track):
     if left_knee_angle is not None:
         reasons.append(f"Left knee angle: {left_knee_angle:.0f} deg")
     else:
-        reasons.append("Left leg keypoints visible nahi hain")
+        reasons.append("Left leg keypoints not visible")
 
     if right_knee_angle is not None:
         reasons.append(f"Right knee angle: {right_knee_angle:.0f} deg")
     else:
-        reasons.append("Right leg keypoints visible nahi hain")
+        reasons.append("Right leg keypoints not visible")
 
     valid_angles = [
         a for a in (left_knee_angle, right_knee_angle)
@@ -477,7 +477,7 @@ def _analyze_activity(keypoints, track):
 
             reasons.insert(
                 0,
-                f"Body center consistently move kar raha hai: "
+                f"Body center is consistently moving: "
                 f"{movement:.1f} px/frame movement, "
                 f"{net_disp:.0f} px net displacement, "
                 f"{consistency:.2f} direction consistency"
@@ -488,8 +488,8 @@ def _analyze_activity(keypoints, track):
         if movement >= WALK_MIN_MOVEMENT:
 
             reasons.append(
-                f"Movement hai par Walking confirm nahi hua — "
-                f"displacement ya consistency kam hai "
+                f"Movement detected but Walking not confirmed — "
+                f"displacement or consistency is too low "
                 f"(streak: {streak}/{WALK_CONFIRM_FRAMES})"
             )
 
@@ -506,7 +506,7 @@ def _analyze_activity(keypoints, track):
 
         reasons.insert(
             0,
-            f"Dono knees mudi hui hain "
+            f"Both knees are bent "
             f"(avg knee angle {avg_knee_angle:.0f} deg < {KNEE_BENT_ANGLE:.0f} deg)"
         )
 
@@ -525,7 +525,7 @@ def _analyze_activity(keypoints, track):
 
         reasons.insert(
             0,
-            f"Taangein seedhi hain "
+            f"Legs are straight "
             f"(avg knee angle {avg_knee_angle:.0f} deg >= {KNEE_STRAIGHT_ANGLE:.0f} deg)"
         )
 
@@ -537,8 +537,8 @@ def _analyze_activity(keypoints, track):
 
     reasons.insert(
         0,
-        "Legs properly visible nahi hain, "
-        "isliye Standing/Sitting confidently nahi keh sakte"
+        "Legs are not properly visible, "
+        "so Standing/Sitting cannot be stated confidently"
     )
 
     if shoulder_center is not None and hip_center is not None:
@@ -717,12 +717,12 @@ def analyze_frame(frame):
 if __name__ == "__main__":
 
     print("Live pose detection + position + activity justification")
-    print("Quit karne ke liye 'q' dabayein.\n")
+    print("Press 'q' to quit.\n")
 
     cap = cv2.VideoCapture(0)
 
     if not cap.isOpened():
-        print("Error: Camera open nahi ho raha.")
+        print("Error: Camera could not be opened.")
         raise SystemExit
 
     frame_count = 0
@@ -733,7 +733,7 @@ if __name__ == "__main__":
         ret, frame = cap.read()
 
         if not ret:
-            print("Error: Frame receive nahi ho raha.")
+            print("Error: Could not receive frame.")
             break
 
         annotated_frame, persons = analyze_frame(frame)
@@ -756,7 +756,7 @@ if __name__ == "__main__":
         )
 
         if not persons:
-            print("  Koi person detect nahi hua.")
+            print("  No person detected.")
 
         for p in persons:
 

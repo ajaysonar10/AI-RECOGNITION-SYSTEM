@@ -50,7 +50,7 @@ def show_camera():
 
     if not st.session_state.camera_running:
         st.info(
-            "Camera start karne ke liye 🟢 Start Camera dabayein."
+            "To start Camera 🟢 Press Start Camera."
         )
         return
 
@@ -97,14 +97,14 @@ def show_camera():
         if not cap.isOpened():
 
             system_metric.metric("System", "OFFLINE")
-            st.error("❌ Laptop camera open nahi ho raha.")
+            st.error("❌ Laptop camera could not be opened.")
             st.session_state.camera_running = False
             return
 
     else:
 
         st.info(
-            "📱 Mobile aur laptop same Wi-Fi network par hone chahiye."
+            "📱 Mobile and laptop must be on the same Wi-Fi network."
         )
 
         mobile_ip = st.text_input(
@@ -120,7 +120,7 @@ def show_camera():
         )
 
         if not mobile_ip:
-            st.warning("⚠️ Pehle Mobile IP Address enter karo.")
+            st.warning("⚠️ Enter the Mobile IP Address first.")
             return
 
         video_url = f"http://{mobile_ip}:{port}/video"
@@ -134,8 +134,8 @@ def show_camera():
             system_metric.metric("System", "OFFLINE")
 
             st.error(
-                "❌ Mobile camera connect nahi hua. "
-                "IP address, port aur Wi-Fi connection check karo."
+                "❌ Mobile camera could not connect. "
+                "Check the IP address, port and Wi-Fi connection."
             )
 
             st.session_state.camera_running = False
@@ -154,7 +154,7 @@ def show_camera():
 
             system_metric.metric("System", "OFFLINE")
 
-            st.error("❌ Camera frame receive nahi ho raha.")
+            st.error("❌ Camera frames are not being received.")
             break
 
         # ----------------------------------------------
@@ -229,7 +229,7 @@ def show_camera():
             )
         elif activity == "No Person":
             detection_placeholder.warning(
-                "🟡 Frame mein koi person detect nahi hua."
+                "🟡 No person detected in the frame."
             )
         else:
             detection_placeholder.warning(
