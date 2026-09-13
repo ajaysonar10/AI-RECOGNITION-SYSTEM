@@ -457,3 +457,463 @@ def show_camera():
         "System",
         "OFFLINE"
     )
+
+
+# ============================================================
+# LIVE TASK EVALUATION
+# (User task deta hai -> live camera se AI verify karta hai)
+# ============================================================
+
+from task_eval import LiveTaskEvaluator, build_report
+
+
+def show_task_evaluation():
+
+    st.subheader("📝 Task")
+
+    task = st.text_area(
+        "What should the person do? (live camera par perform karo)",
+        placeholder="Example: Pick up the bottle and place it on the table",
+        key="task_eval_input"
+    )
+
+    # Live parse preview — user ko dikhta hai AI ne kya samjha
+    if task.strip():
+
+        from task_eval import parse_task
+
+        preview = parse_task(task)
+
+        p1, p2, p3 = st.columns(3)
+
+        with p1:
+            st.metric(
+                "Activities",
+                ", ".join(preview["activities"]) or "None"
+            )
+
+        with p2:
+            st.metric(
+                "Objects",
+                ", ".join(preview["objects"]) or "None"
+            )
+
+        with p3:
+            st.metric(
+                "Interaction",
+                "Required" if preview["interaction_required"] else "Optional"
+            )
+
+    else:
+        st.info("Task likho — jaise: 'walk across the room', "
+                "'sit on the chair', 'pick up the bottle'.")
+
+    # ----------------------------------------------
+    # Camera source
+    # ----------------------------------------------
+
+    st.subheader("📷 Camera Source")
+
+    camera_type = st.radio(
+        "Select Camera Source",
+        ["Laptop Camera", "Connect with Mobile"],
+        horizontal=True,
+        key="task_eval_camera_type"
+    )
+
+    if camera_type == "Connect with Mobile":
+
+        st.info("📱 Mobile and laptop must be on the same Wi-Fi network.")
+
+        mobile_ip = st.text_input(
+            "Mobile IP Address",
+            placeholder="Example: 192.168.1.5",
+            key="task_eval_mobile_ip"
+        )
+
+        port = st.number_input(
+            "Port",
+            min_value=1,
+            max_value=65535,
+            value=8080,
+            key="task_eval_port"
+        )
+
+    # ----------------------------------------------
+    # Session state init
+    # ----------------------------------------------
+
+    if "task_eval_running" not in st.session_state:
+        st.session_state.task_eval_running = False
+
+    if "task_evaluator" not in st.session_state:
+        st.session_state.task_evaluator = None
+
+    if "task_eval_verdict" not in st.session_state:
+        st.session_state.task_eval_verdict = None
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        start_eval = st.button(
+            "🟢 Start Task Evaluation",
+            use_container_width=True,
+            disabled=not task.strip()
+        )
+
+    with col2:
+        stop_eval = st.button(
+            "🔴 Stop & Get Verdict",
+            use_container_width=True
+        )
+
+    # ----------------------------------------------
+    # Start
+    # ----------------------------------------------
+
+    if start_eval:
+
+        if not task.strip():
+            st.error("Please specify a task first.")
+        else:
+            st.session_state.task_evaluator = LiveTaskEvaluator(task)
+            st.session_state.task_eval_verdict = None
+            st.session_state.task_eval_running = True
+            st.rerun()
+
+    # ----------------------------------------------
+    # Stop -> final verdict
+    # ----------------------------------------------
+
+    if stop_eval and st.session_state.task_eval_running:
+
+        st.session_state.task_eval_running = False
+
+        evaluator = st.session_state.task_evaluator
+
+        if evaluator is not None and evaluator.frames_processed > 0:
+            st.session_state.task_eval_verdict = evaluator.evaluate()
+
+    # ----------------------------------------------
+    # Verdict screen (stop/auto-complete ke baad)
+    # ----------------------------------------------
+
+    if (
+        not st.session_state.task_eval_running
+        and st.session_state.task_eval_verdict is not None
+    ):
+
+        _show_verdict(
+            st.session_state.task_eval_verdict,
+            st.session_state.task_evaluator
+        )
+        return
+
+    # ----------------------------------------------
+    # LIVE LOOP
+    # ----------------------------------------------
+
+    if st.session_state.task_eval_running:
+
+        evaluator = st.session_state.task_evaluator
+
+        # ------------------------------------------
+        # Camera open karo
+        # ------------------------------------------
+
+        if camera_type == "Laptop Camera":
+
+            cap = cv2.VideoCapture(0)
+
+        else:
+
+            if not st.session_state.get("task_eval_mobile_ip"):
+                st.error("❌ Enter the Mobile IP Address first.")
+                st.session_state.task_eval_running = False
+                return
+
+            video_url = (
+                f"http://{st.session_state.task_eval_mobile_ip}:"
+                f"{int(st.session_state.task_eval_port)}/video"
+            )
+
+            st.caption(f"Stream URL: {video_url}")
+
+            cap = cv2.VideoCapture(video_url)
+
+        if not cap.isOpened():
+            st.error("❌ Camera could not be opened.")
+            st.session_state.task_eval_running = False
+            return
+
+        frame_placeholder = st.empty()
+
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
+        m1, m2, m3 = st.columns(3)
+
+        with m1:
+            activity_metric = st.empty()
+
+        with m2:
+            elapsed_metric = st.empty()
+
+        with m3:
+            frames_metric = st.empty()
+
+        st.subheader("✅ Requirement Checklist (live)")
+
+        checklist_placeholder = st.empty()
+
+        st.subheader("🧠 Live Justification")
+
+        justify_placeholder = st.empty()
+
+        auto_note = st.info(
+            "🤖 Live evaluation running... Task poora karo. "
+            "Jaise hi saari requirements confirm ho jayengi, "
+            "verdict AUTO dikh jayega. Ya 'Stop & Get Verdict' dabao."
+        )
+
+        completed_automatically = False
+
+        while st.session_state.task_eval_running:
+
+            ret, frame = cap.read()
+
+            if not ret:
+                st.error("❌ Camera frames are not being received.")
+                break
+
+            annotated, status = evaluator.step(frame)
+
+            # --------------------------------------
+            # Frame display
+            # --------------------------------------
+
+            frame_placeholder.image(
+                cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
+                channels="RGB",
+                use_container_width=True
+            )
+
+            # --------------------------------------
+            # Metrics
+            # --------------------------------------
+
+            current_activity = (
+                max(
+                    evaluator.activity_best,
+                    key=evaluator.activity_best.get
+                )
+                if evaluator.activity_best else "Detecting..."
+            )
+
+            activity_metric.metric(
+                "Latest Activity",
+                current_activity
+            )
+
+            elapsed_metric.metric(
+                "Elapsed",
+                f"{evaluator.stats_elapsed():.0f}s"
+            )
+
+            frames_metric.metric(
+                "Frames",
+                evaluator.frames_processed
+            )
+
+            progress_value = evaluator.progress()
+            progress_bar.progress(progress_value)
+            status_text.write(
+                f"**{status}** — {progress_value * 100:.0f}%"
+            )
+
+            # --------------------------------------
+            # Live checklist
+            # --------------------------------------
+
+            checklist_placeholder.markdown(
+                _checklist_markdown(evaluator)
+            )
+
+            # --------------------------------------
+            # Live justification (latest person)
+            # --------------------------------------
+
+            reasons_md = ""
+
+            if evaluator.activity_reasons:
+
+                latest_activity = max(
+                    evaluator.activity_best,
+                    key=evaluator.activity_best.get
+                )
+
+                reasons = evaluator.activity_reasons.get(
+                    latest_activity, []
+                )
+
+                reasons_md = "\n".join(
+                    f"- {reason}" for reason in reasons[:4]
+                )
+
+            justify_placeholder.markdown(
+                reasons_md or "_Waiting for person..._"
+            )
+
+            # --------------------------------------
+            # Auto-complete?
+            # --------------------------------------
+
+            if evaluator.finished:
+                completed_automatically = True
+                break
+
+        cap.release()
+
+        # ------------------------------------------
+        # Loop khatam -> verdict dikhao
+        # ------------------------------------------
+
+        st.session_state.task_eval_running = False
+
+        if evaluator.frames_processed > 0:
+            st.session_state.task_eval_verdict = evaluator.evaluate()
+
+        if completed_automatically:
+            st.success(
+                "🎉 All requirements confirmed — task auto-completed!"
+            )
+        else:
+            st.info("Evaluation stopped — here is the verdict.")
+
+        st.rerun()
+
+
+def _checklist_markdown(evaluator):
+    """Live checklist markdown banata hai."""
+
+    lines = []
+
+    for check in evaluator.verdict_checklist():
+
+        state = check["state"]
+
+        if state in ("confirmed", "interacted"):
+            icon = "✅"
+            note = "confirmed"
+        elif state in ("seen",):
+            icon = "⚠️"
+            note = "seen only"
+        else:
+            icon = "⬜"
+            note = "waiting"
+
+        label = check.get("activity") or check.get("object")
+
+        lines.append(
+            f"{icon} **{label}** — {note}"
+        )
+
+    return "\n\n".join(lines) or "_No requirements parsed._"
+
+
+def _show_verdict(verdict, evaluator):
+    """Final verdict + report render karta hai."""
+
+    st.divider()
+
+    st.header("📊 Task Verdict")
+
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        st.metric("Score", f"{verdict['score']}%")
+
+    with c2:
+        st.metric("Progress", f"{verdict['progress'] * 100:.0f}%")
+
+    with c3:
+        stats = verdict["stats"]
+        st.metric("Frames Analyzed", stats["frames_processed"])
+
+    if verdict["status"] == "TASK COMPLETED":
+        st.success("✅ " + verdict["status"])
+    elif verdict["status"] == "TASK PARTIALLY COMPLETED":
+        st.warning("⚠️ " + verdict["status"])
+    elif verdict["status"] == "TASK NOT COMPLETED":
+        st.error("❌ " + verdict["status"])
+    else:
+        st.info("ℹ️ " + verdict["status"])
+
+    st.write(verdict["explanation"])
+
+    st.subheader("📝 Task")
+    st.info(evaluator.task_text)
+
+    st.subheader("🚶 Activities")
+
+    if verdict["activity_checks"]:
+
+        for check in verdict["activity_checks"]:
+
+            if check["state"] == "confirmed":
+                st.success(
+                    f"✅ {check['activity']} — "
+                    f"best confidence {check['best_confidence']}%"
+                )
+            elif check["state"] == "seen":
+                st.warning(
+                    f"⚠️ {check['activity']} seen briefly — "
+                    f"best confidence {check['best_confidence']}%"
+                )
+            else:
+                st.error(f"❌ {check['activity']} never observed")
+
+            reasons = verdict.get("activity_reasons", {}).get(
+                check["activity"]
+            )
+
+            if reasons:
+                st.caption("Justification: " + " | ".join(reasons[:3]))
+
+    else:
+        st.info("No activity was required by this task.")
+
+    st.subheader("📦 Objects")
+
+    if verdict["object_checks"]:
+
+        for check in verdict["object_checks"]:
+
+            if check["state"] == "interacted":
+                st.success(
+                    f"✅ {check['object']} found near the person — "
+                    f"confidence {check['best_confidence']}%"
+                )
+            elif check["state"] == "seen":
+                st.warning(
+                    f"⚠️ {check['object']} seen but never near the person — "
+                    f"confidence {check['best_confidence']}%"
+                )
+            else:
+                st.error(f"❌ {check['object']} not detected")
+
+    else:
+        st.info("No object was required by this task.")
+
+    st.subheader("📄 Report")
+
+    report = build_report(evaluator)
+
+    st.code(report)
+
+    st.download_button(
+        "⬇️ Download Report",
+        report,
+        file_name="task_evaluation_report.txt",
+        mime="text/plain"
+    )

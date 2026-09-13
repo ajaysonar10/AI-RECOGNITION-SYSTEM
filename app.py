@@ -1,6 +1,6 @@
 import streamlit as st
 from datetime import datetime
-from camera import show_camera
+from camera import show_camera, show_task_evaluation
 
 # ============================================================
 # PAGE CONFIGURATION
@@ -113,6 +113,32 @@ st.markdown(
         border: 1px solid #19334f;
         border-radius: 12px;
         overflow: hidden;
+    }
+
+
+    /* ---------- INPUT FIELDS ---------- */
+
+    .stTextArea textarea,
+    .stTextInput input,
+    div[data-testid="stTextArea"] textarea,
+    div[data-testid="stTextInput"] input {
+        color: #ffffff !important;
+        -webkit-text-fill-color: #ffffff !important;
+        background: #081522;
+        border: 1px solid #19334f;
+        border-radius: 10px;
+    }
+
+    .stTextArea textarea::placeholder,
+    .stTextInput input::placeholder {
+        color: #526981 !important;
+        -webkit-text-fill-color: #526981 !important;
+    }
+
+    .stTextArea textarea:focus,
+    .stTextInput input:focus {
+        border-color: #1689d8 !important;
+        outline: none;
     }
 
 
@@ -455,10 +481,23 @@ elif page == "📡 Live Monitor":
     st.title("📡 Live Monitor")
 
     st.caption(
-        "Real-time human activity monitoring"
+        "Real-time monitoring + live task evaluation"
     )
 
-    show_camera()
+    # Ek page, do modes — ek waqt me ek hi camera loop chal sakta hai
+    mode = st.radio(
+        "Mode",
+        ["🤖 Activity Monitor", "✅ Task Evaluation"],
+        horizontal=True,
+        label_visibility="collapsed"
+    )
+
+    st.divider()
+
+    if mode == "🤖 Activity Monitor":
+        show_camera()
+    else:
+        show_task_evaluation()
 
     
     

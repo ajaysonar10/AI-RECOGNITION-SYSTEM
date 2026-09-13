@@ -254,6 +254,22 @@ def _update_tracks(centers):
 
 
 # ============================================================
+# TRACKER RESET (naye video / task evaluation ke liye)
+# ============================================================
+
+def reset_tracker():
+    """
+    Saare person tracks reset kar deta hai.
+    Naye video ya task evaluation shuru karne se pehle call karo,
+    taaki purani movement history naye analysis ko affect na kare.
+    """
+    global _tracks, _next_track_id
+
+    _tracks = []
+    _next_track_id = 1
+
+
+# ============================================================
 # GEOMETRY HELPERS
 # ============================================================
 
