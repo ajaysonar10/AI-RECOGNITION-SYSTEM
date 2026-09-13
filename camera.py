@@ -4,6 +4,50 @@ import time
 from datetime import datetime
 
 from pose_detection import analyze_frame
+from object_detection import detect_objects
+
+
+# ------------------------------------------------------------
+# Object boxes ko pose frame par draw karne ka helper
+# (alag color, taaki pose/person boxes se confuse na ho)
+# ------------------------------------------------------------
+
+OBJECT_BOX_COLOR = (0, 200, 255)   # BGR: orange
+
+
+def draw_object_boxes(frame, objects):
+    """
+    Detected objects ke boxes + labels frame par draw karta hai.
+    """
+
+    for obj in objects:
+
+        x1, y1, x2, y2 = obj["box"]
+
+        p1 = (int(x1), int(y1))
+        p2 = (int(x2), int(y2))
+
+        label = (
+            f'{obj["class_name"]} '
+            f'{obj["confidence"] * 100:.0f}%'
+        )
+
+        cv2.rectangle(frame, p1, p2, OBJECT_BOX_COLOR, 2)
+
+        label_y = max(p1[1] - 6, 14)
+
+        cv2.putText(
+            frame,
+            label,
+            (p1[0], label_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            OBJECT_BOX_COLOR,
+            1,
+            cv2.LINE_AA,
+        )
+
+    return frame
 
 
 def show_camera():
@@ -58,7 +102,7 @@ def show_camera():
 
     st.divider()
 
-    metric_col1, metric_col2, metric_col3 = st.columns(3)
+    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
 
     with metric_col1:
         activity_metric = st.empty()
@@ -69,10 +113,17 @@ def show_camera():
     with metric_col3:
         system_metric = st.empty()
 
+    with metric_col4:
+        objects_metric = st.empty()
+
     st.subheader("Current AI Detection")
 
     progress_placeholder = st.empty()
     detection_placeholder = st.empty()
+
+    st.subheader("📦 Objects in Frame")
+
+    objects_placeholder = st.empty()
 
     st.subheader("👤 Person Position & Justification")
 
@@ -85,8 +136,10 @@ def show_camera():
     activity_metric.metric("Current Activity", "Detecting...")
     confidence_metric.metric("Confidence", "0.0%")
     system_metric.metric("System", "ONLINE")
+    objects_metric.metric("Objects", "0")
     progress_placeholder.progress(0)
     detection_placeholder.info("🤖 AI camera detection running...")
+    objects_placeholder.info("📦 Object detection active — boxes frame par dikhenge.")
 
     if camera_type == "Laptop Camera":
 
@@ -164,6 +217,17 @@ def show_camera():
 
         detected_frame, persons = analyze_frame(frame)
 
+        # ----------------------------------------------
+        # Object detection (saare 80 COCO objects)
+        # ----------------------------------------------
+
+        _, objects = detect_objects(frame)
+
+        detected_frame = draw_object_boxes(
+            detected_frame,
+            objects
+        )
+
         frame_count += 1
 
         # ----------------------------------------------
@@ -195,6 +259,11 @@ def show_camera():
         system_metric.metric(
             "System",
             "ONLINE"
+        )
+
+        objects_metric.metric(
+            "Objects",
+            len(objects)
         )
 
         progress_value = max(
@@ -273,6 +342,33 @@ def show_camera():
             analysis_placeholder.info(
                 "Person position aur justification yahan dikhega "
                 "jab koi person frame mein aayega."
+            )
+
+        # ----------------------------------------------
+        # Objects summary (class-wise count)
+        # ----------------------------------------------
+
+        if objects:
+
+            class_counts = {}
+
+            for obj in objects:
+                name = obj["class_name"]
+                class_counts[name] = class_counts.get(name, 0) + 1
+
+            summary_text = "  |  ".join(
+                f"**{name}** x{count}"
+                for name, count in class_counts.items()
+            )
+
+            objects_placeholder.markdown(
+                f"📦 {len(objects)} objects: {summary_text}"
+            )
+
+        else:
+
+            objects_placeholder.info(
+                "📦 Koi object detect nahi hua is frame mein."
             )
 
         # ----------------------------------------------
