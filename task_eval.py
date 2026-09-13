@@ -265,6 +265,11 @@ class LiveTaskEvaluator:
         self.finished = False
         self.verdict = None
 
+        # 10-second wrong activity tracking
+        self.latest_activity = None
+        self.wrong_activity_start = None
+        self.voice_alert_pending = False
+
     # ------------------------------------------------
     # MAIN: har frame ke saath call karo
     # ------------------------------------------------
@@ -305,6 +310,43 @@ class LiveTaskEvaluator:
                 self.activity_reasons[activity] = list(
                     person["justification"]
                 )
+        # ============================================================
+        # 10-SECOND WRONG ACTIVITY DETECTION
+        # ============================================================
+
+        if persons:
+
+            current_activity = persons[0]["activity"]
+            self.latest_activity = current_activity
+
+            required_activities = self.requirements["activities"]
+
+            if required_activities:
+
+                # Agar detected activity required activity nahi hai
+                if current_activity not in required_activities:
+
+                    if self.wrong_activity_start is None:
+                        self.wrong_activity_start = time.time()
+                        self.voice_alert_pending = False
+
+                    wrong_duration = (
+                        time.time() - self.wrong_activity_start
+                    )
+
+                    # 10 seconds complete
+                    if wrong_duration >= 10:
+                        self.voice_alert_pending = True
+
+                else:
+                    # Correct activity -> timer reset
+                    self.wrong_activity_start = None
+                    self.voice_alert_pending = False
+
+        else:
+            self.latest_activity = None
+            self.wrong_activity_start = None
+            self.voice_alert_pending = False        
 
         # --------------------------------------------
         # Object evidence + proximity
@@ -510,6 +552,26 @@ class LiveTaskEvaluator:
         """Live session ka elapsed time (seconds)."""
         return time.time() - self.start_time
 
+    def get_voice_alert(self):
+
+        if not self.voice_alert_pending:
+            return None
+
+        required = self.requirements["activities"]
+
+        if required:
+            message = (
+                "Wrong activity. "
+                f"Please perform {required[0]}."
+            )
+        else:
+            message = "Wrong activity. Please perform the required task."
+
+        # Ek alert ke baad dobara immediately nahi
+        self.voice_alert_pending = False
+
+        return message
+
     def verdict_checklist(self):
         """
         UI checklist ke liye current state of every requirement:
@@ -694,6 +756,11 @@ class LiveTaskEvaluator:
         self.last_annotated = None
         self.finished = False
         self.verdict = None
+
+        # 10-second wrong activity tracking
+        self.latest_activity = None
+        self.wrong_activity_start = None
+        self.voice_alert_pending = False
 
         reset_tracker()
 

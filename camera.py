@@ -1,12 +1,31 @@
+from pose_detection import analyze_frame
+from object_detection import detect_objects
+from step_validator import StepValidator
+
+import threading
 import cv2
 import streamlit as st
 import time
 from datetime import datetime
+import pyttsx3
 
 from pose_detection import analyze_frame
 from object_detection import detect_objects
 
 
+#functions
+def speak_alert(message):
+    def _speak():
+        try:
+            engine = pyttsx3.init()
+            engine.setProperty("rate", 150)
+            engine.say(message)
+            engine.runAndWait()
+            engine.stop()
+        except Exception as e:
+            print("Voice alert error:", e)
+
+    threading.Thread(target=_speak, daemon=True).start()
 # ------------------------------------------------------------
 # Object boxes ko pose frame par draw karne ka helper
 # (alag color, taaki pose/person boxes se confuse na ho)
@@ -83,6 +102,7 @@ def show_camera():
     if "activity_history" not in st.session_state:
         st.session_state.activity_history = []
 
+
     if stop_camera:
         st.session_state.camera_running = False
         st.session_state.system_status = "OFFLINE"
@@ -120,6 +140,21 @@ def show_camera():
 
     progress_placeholder = st.empty()
     detection_placeholder = st.empty()
+
+    st.subheader("🎯 Sequential Step Evaluation")
+
+    st.subheader("🎯 Sequential Step Evaluation")
+
+    step_col1, step_col2, step_col3 = st.columns(3)
+
+    with step_col1:
+        current_step_placeholder = st.empty()
+
+    with step_col2:
+        step_status_placeholder = st.empty()
+
+    with step_col3:
+        step_message_placeholder = st.empty()
 
     st.subheader("📦 Objects in Frame")
 
@@ -197,6 +232,9 @@ def show_camera():
         st.success("🟢 Mobile camera connected!")
 
     last_log_time = 0
+    voice_engine = pyttsx3.init()
+    voice_engine.setProperty("rate", 150)
+    last_voice_time = 0
     frame_count = 0
 
     while st.session_state.camera_running:
@@ -245,6 +283,67 @@ def show_camera():
 
             activity = "No Person"
             confidence = 0.0
+
+        # ============================================================
+        # SEQUENTIAL STEP VALIDATION
+        # ============================================================
+
+        if "step_validator" not in st.session_state:
+            st.session_state.step_validator = StepValidator()
+
+        validator = st.session_state.step_validator
+
+        if activity != "No Person":
+
+            result = validator.check_activity(activity)
+
+            st.session_state.step_status = result["status"]
+            st.session_state.step_message = result["message"]
+
+                # 🔊 VOICE ALERT FOR WRONG ACTIVITY
+        if result["status"] == "WRONG":
+
+            now = time.time()
+
+            if now - last_voice_time >= 3:
+
+                voice_engine.say(result["message"])
+                voice_engine.runAndWait()
+
+                last_voice_time = now
+
+        else:
+
+            st.session_state.step_status = "WAITING"
+            st.session_state.step_message = "Person not detected."
+
+        current_step = validator.get_current_step()
+
+        if current_step is None:
+            current_step_text = "🎉 COMPLETED"
+        else:
+            current_step_text = current_step
+
+        current_step_placeholder.metric(
+            "Current Step",
+            current_step_text
+        )
+
+        if st.session_state.step_status == "CORRECT":
+            step_status_placeholder.success("✅ CORRECT")
+
+        elif st.session_state.step_status == "WRONG":
+            step_status_placeholder.error("❌ WRONG")
+
+        elif st.session_state.step_status == "COMPLETED":
+            step_status_placeholder.success("🎉 COMPLETED")
+
+        else:
+            step_status_placeholder.info("⏳ WAITING")
+
+        step_message_placeholder.write(
+            st.session_state.step_message
+        )
 
         activity_metric.metric(
             "Current Activity",
@@ -688,6 +787,20 @@ def show_task_evaluation():
 
             annotated, status = evaluator.step(frame)
 
+            voice_message = evaluator.get_voice_alert()
+
+            if voice_message:
+                speak_alert(voice_message)
+            # ==================================================
+            # 🔊 10-SECOND WRONG ACTIVITY VOICE ALERT
+            # ==================================================
+
+            voice_message = evaluator.get_voice_alert()
+
+            if voice_message:
+
+                voice_engine.say(voice_message)
+                voice_engine.runAndWait()
             # --------------------------------------
             # Frame display
             # --------------------------------------
