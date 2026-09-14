@@ -4,10 +4,12 @@ build_exe.py
 Builds the BAS-AI standalone Windows .exe with PyInstaller.
 
 Run:
-    python build_exe.py
+    python build_exe.py              -> SINGLE-FILE .exe (default)
+    python build_exe.py --onedir     -> folder-based .exe (faster startup)
 
 Output:
-    dist/BAS-AI.exe        <- double-click to run, no Python needed
+    dist/BAS-AI.exe            (single file mode)
+    dist/BAS-AI/BAS-AI.exe     (folder mode)
 
 The .exe includes:
   - All source modules (app.py, camera.py, pose_detection.py, ...)
@@ -15,6 +17,10 @@ The .exe includes:
   - Streamlit runtime + static assets
   - pywebview + WebView2 loader
   - pyttsx3 voice engine data
+
+Note: the single-file .exe unpacks itself to a temp folder on each
+launch, so the first window can take 30-60 s to appear. The folder
+build starts faster.
 """
 
 import os
@@ -93,11 +99,13 @@ def main():
         "--exclude-module=pytest",
     ]
 
+    onedir = "--onedir" in sys.argv
+
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--noconfirm",
         "--clean",
-        "--onedir",                 # fastest startup; a folder-based app
+        "--onedir" if onedir else "--onefile",
         "--console",                # keep console for first-run diagnostics
         f"--name={NAME}",
         *data_args,
@@ -108,20 +116,27 @@ def main():
 
     run(cmd)
 
-    exe_path = os.path.join(HERE, "dist", NAME, f"{NAME}.exe")
-    size_mb = 0
-    total = 0
-    for root, _, files in os.walk(os.path.join(HERE, "dist", NAME)):
-        for f in files:
-            total += os.path.getsize(os.path.join(root, f))
-    size_mb = total / (1024 * 1024)
-
     print()
     print("=" * 60)
-    print(f"BUILD OK -> dist/{NAME}/{NAME}.exe  (folder: {size_mb:.0f} MB)")
+
+    if onedir:
+        folder = os.path.join(HERE, "dist", NAME)
+        total = 0
+        for root, _, files in os.walk(folder):
+            for f in files:
+                total += os.path.getsize(os.path.join(root, f))
+        print(f"BUILD OK -> dist/{NAME}/{NAME}.exe  "
+              f"(folder: {total / (1024 * 1024):.0f} MB)")
+        print("Share the whole dist/BAS-AI folder (zip it) - the .exe")
+        print("needs the DLLs next to it. Double-click BAS-AI.exe.")
+    else:
+        exe = os.path.join(HERE, "dist", f"{NAME}.exe")
+        size = os.path.getsize(exe) / (1024 * 1024)
+        print(f"BUILD OK -> dist/{NAME}.exe  (single file: {size:.0f} MB)")
+        print("This ONE file is the whole app - share it directly.")
+        print("First launch unpacks itself, give it 30-60 seconds.")
+
     print("=" * 60)
-    print("Share the whole dist/BAS-AI folder (zip it) - the .exe")
-    print("needs the DLLs next to it. Double-click BAS-AI.exe.")
 
 
 if __name__ == "__main__":
