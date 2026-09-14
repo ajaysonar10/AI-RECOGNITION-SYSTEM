@@ -1,0 +1,154 @@
+============================================================
+BAS-AI — RECOGNIZABLE TASK LIST (Camera AI)
+============================================================
+
+Everything below is verified from real YOLO Pose keypoints +
+YOLO object detection + object tracking + multi-frame temporal
+confirmation. No fake completions, no random confidence values.
+
+How to use: open the app -> Live Monitor -> Task Verification ->
+type a task below -> "Start / Verify Task".
+The counter (x/12) shows temporal confirmation progress, and the
+reason line under the video tells you exactly what is missing.
+
+
+============================================================
+1. POSE TASKS (body only — nothing else needed)
+============================================================
+
+Task text                        | What the AI verifies
+---------------------------------+--------------------------------------------
+Stand up / Be standing           | Legs straight (knee angle >= 150 deg),
+                                 | body upright
+Sit down / Take a seat           | Knees bent (< 125 deg), hips at knee level
+Raise your right hand            | Right wrist above shoulder + margin
+Raise your left hand             | Left wrist above shoulder
+Raise both hands / Hands up      | Both wrists above their shoulders
+Raise your hand                  | Either hand raised
+Walk / Move around / Walking     | Motion tracker: real net displacement +
+                                 | direction consistency (jitter-proof),
+                                 | 4-frame confirm streak
+
+
+============================================================
+2. OBJECT TASKS (22 supported)
+============================================================
+
+PICK / LIFT
+-----------
+  Pick up the bottle             Hold + lift the bottle clearly above its
+                                 grab point (or hold it steadily ~4 s)
+  Pick up an object              Any tracked object (phone, cup, book...)
+  Pick up and inspect object     Pick it up and raise it toward your face
+
+CONTAINERS / PLACEMENT
+----------------------
+  Pick up the bottle and place it inside a box
+                                 Object resting inside a bowl/cup/box,
+                                 stable, hands away
+  Take the bottle out of the box Was inside -> now held & lifted out
+  Put the bottle on the table    Bottle base at surface level, >= 40 %
+                                 horizontal overlap, stable
+  Pick up tool, place in container
+                                 Scissors/knife/fork/spoon/phone/remote
+                                 into a container
+  Place object on marked location
+                                 Uses the Marked Location region
+                                 (set it in Task Library Options)
+  Remove object from marked location
+                                 Object was on the region -> picked up
+
+MOVEMENT
+--------
+  Move the bottle from Place 1 to Place 2
+                                 Staged pipeline: bottle in LEFT third ->
+                                 hand grips -> carried (tracked) ->
+                                 enters RIGHT third -> stable + hands away.
+                                 Green PLACE 1 / PLACE 2 zones are drawn
+                                 on the live feed.
+  Move object / Move the object  Displacement >= ~0.8x torso length
+  Carry object / Carry the object with you
+                                 Move + object held for the whole carry
+  Move tool to workstation       Carry a tool to the marked location /
+                                 table region
+
+MULTI-PERSON
+------------
+  Give object to another person  Needs 2 people: giver holds ->
+                                 receiver takes -> release -> stable
+  Receive object from another person
+                                 Same handoff, receiver's perspective
+
+SORTING & COUNTING (set options in "Task Library Options" first)
+----------------------------------------------------------------
+  Sort objects into different containers
+                                 >= 2 containers, each holding objects
+  Put correct colored object into matching box
+                                 Real HSV color measurement; select the
+                                 color in Task Library Options first
+  Place multiple objects into container
+                                 Count set in options (default 3)
+  Take out multiple objects      Count set in options (default 3)
+  Collect objects one by one     Pick N distinct objects
+  Arrange objects in order       Select objects in options, then arrange
+                                 them left-to-right
+
+GESTURES
+--------
+  Touch the object               Hand within ~30% torso reach of it
+  Point to a designated object   Straight arm extended toward the object
+
+
+============================================================
+3. MULTI-STEP MISSIONS
+============================================================
+
+Use the "Multi-Step Task" tab to chain tasks. Steps unlock in
+order (LOCKED -> IN PROGRESS -> COMPLETED); the camera never stops.
+
+Example missions:
+  Stand up -> Pick up the bottle -> Place object inside box
+  Walk -> Pick up an object -> Give object to another person
+  Raise both hands -> Sit down -> Put the bottle on the table
+
+
+============================================================
+4. HONESTLY UNSUPPORTED (will refuse with a reason — by design)
+============================================================
+
+  Open the box / Open container     Lid state is not RGB-observable
+  Close the box / Close container   Lid state is not RGB-observable
+  Push object / Pull object         Direction is person-relative;
+                                    not knowable from a single camera
+  Complete a multi-step maintenance procedure
+                                    Domain-specific; define concrete
+                                    steps in Multi-Step Task mode instead
+
+These are refused honestly — the system never fakes a completion.
+
+
+============================================================
+5. TIPS FOR RELIABLE DETECTION
+============================================================
+
+  - Hold objects ~arm's length from the camera, label facing the
+    lens, well lit.
+  - Best-recognized objects (COCO): phone, bottle, cup, book,
+    banana, remote, scissors, bowl.
+  - COCO has no "box" class — use a bowl/cup, or use
+    Task Library Options -> Marked Location as the target region.
+  - Keep the whole object visible; if your hand hides it completely
+    the tracker cannot follow it.
+  - A task needs ~12 consecutive confirmations (the x/12 counter).
+    Flicker is forgiven by the sliding window, but the action must
+    be real and sustained.
+  - If a task seems stuck, read the reason line under the video —
+    it names the exact check that is failing.
+  - For "Put the bottle on the table": tilt the camera slightly down
+    so more of the table surface is visible (webcam angles give weak
+    table confidence).
+
+============================================================
+BAS-AI | AI-RECOGNITION-SYSTEM
+github.com/ajaysonar10/AI-RECOGNITION-SYSTEM
+============================================================
