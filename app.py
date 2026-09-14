@@ -1,6 +1,6 @@
 import streamlit as st
 from datetime import datetime
-from camera import show_camera, show_task_evaluation
+from camera import show_camera, show_task_evaluation, show_task_verification
 
 # ============================================================
 # PAGE CONFIGURATION
@@ -170,6 +170,10 @@ st.markdown(
 
 if "activity_history" not in st.session_state:
     st.session_state.activity_history = []
+
+# Task verification history (activity history se logically alag)
+if "task_history" not in st.session_state:
+    st.session_state.task_history = []
 
 
 # ============================================================
@@ -484,20 +488,10 @@ elif page == "📡 Live Monitor":
         "Real-time monitoring + live task evaluation"
     )
 
-    # Ek page, do modes — ek waqt me ek hi camera loop chal sakta hai
-    mode = st.radio(
-        "Mode",
-        ["🤖 Activity Monitor", "✅ Task Evaluation"],
-        horizontal=True,
-        label_visibility="collapsed"
-    )
-
-    st.divider()
-
-    if mode == "🤖 Activity Monitor":
-        show_camera()
-    else:
-        show_task_evaluation()
+    # Live Monitor ab sirf Task Verification dikhata hai
+    # (Activity Monitor aur Task Evaluation code camera.py me
+    #  intact hai — bas navigation se hataya gaya hai)
+    show_task_verification()
 
     
     
@@ -580,6 +574,43 @@ elif page == "🕒 Activity History":
         st.info(
             "No AI activity detections yet. "
             "Start the camera from Live Monitor."
+        )
+
+    # --------------------------------------------------------
+    # TASK VERIFICATION HISTORY (activity history se alag)
+    # --------------------------------------------------------
+
+    task_history = st.session_state.get("task_history", [])
+
+    if task_history:
+
+        st.divider()
+
+        st.subheader("✅ Task Verification History")
+
+        st.caption(
+            "Tasks completed via Task Verification "
+            "(kept separate from activity history)"
+        )
+
+        task_rows = []
+
+        for item in task_history:
+            task_rows.append(
+                {
+                    "Date": item["date"],
+                    "Time": item["time"],
+                    "Task": item["task"],
+                    "Step": item["step"],
+                    "Status": item["status"],
+                    "Confidence": f'{item["confidence"]:.0f}%'
+                }
+            )
+
+        st.dataframe(
+            task_rows,
+            use_container_width=True,
+            hide_index=True
         )
 
 
