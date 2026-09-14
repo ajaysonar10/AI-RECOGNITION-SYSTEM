@@ -2,17 +2,17 @@
 object_tasks.py
 ===============
 
-BAS-AI • Object-Interaction Task Library (sirf RGB-verifiable tasks)
+BAS-AI • Object-Interaction Task Library (RGB-verifiable tasks only)
 
-Har task REAL sensors se verify hota hai:
+Every task is verified from REAL sensors:
   - YOLO Pose keypoints     (hands/wrists/body)
   - YOLO Object Detection   (bottle, box, table, ...)
   - ObjectTracker           (movement, hold, lift, displacement)
   - sliding-window temporal confirmation (TaskVerificationSession)
 
-HONEST SUPPORT MATRIX (user ke 28 requested tasks me se):
+HONEST SUPPORT MATRIX (of the user's 28 requested tasks):
 
-  SUPPORTED (RGB + COCO + tracking se REAL verification): 22
+  SUPPORTED (REAL verification from RGB + COCO + tracking): 22
     1  pick_bottle              12 place_marked_location
     2  pick_object              13 remove_marked_location
     3  place_object_box         14 sort_containers
@@ -29,22 +29,22 @@ HONEST SUPPORT MATRIX (user ke 28 requested tasks me se):
    27 pick_move_workstation
 
   UNSUPPORTED (honest — unreliable/fine-grained/hidden info): 6
-    8  open box (lid occlusion state RGB se observable nahi)
+    8  open box (lid occlusion state is not RGB-observable)
     28 multi-step maintenance procedure (domain-specific abstract steps)
-    23/24 push/pull (direction person-relative — RGB se inferable nahi)
+    23/24 push/pull (direction is person-relative — not inferable from RGB)
     8' close box (same as 8)
-    (+ push/pull ki jagah generic displacement task offer hota hai)
+    (+ a generic displacement task is offered instead of push/pull)
 
-  Note: 23/24 (push/pull) aur 8/9 (open/close) — open/close me se
-  SIRF "remove object from box" wala hissa reliably observable hai;
-  lid open/close state RGB camera se reliably nahi. Push/pull
-  direction person-facing par depend karta hai jo single RGB
-  camera se nahi pata. Ye tasks UNSUPPORTED mark kiye gaye hain —
-  fake rules nahi banayenge.
+  Note: 23/24 (push/pull) and 8/9 (open/close) — of open/close, ONLY
+  the "remove object from box" part is reliably observable; the lid
+  open/close state is not reliable from an RGB camera. Push/pull
+  direction depends on the person's facing, which a single RGB
+  camera cannot know. These tasks are marked UNSUPPORTED —
+  we will not build fake rules.
 
-Parsing sirf whitelisted phrases par hota hai — agar task text kisi
-known task se match nahi karta to result honestly "unsupported"
-hoti hai, kabhi bhi random completion nahi.
+Parsing happens only on whitelisted phrases — if the task text does
+not match any known task, the result is honestly "unsupported",
+never a random completion.
 """
 
 import math
@@ -56,12 +56,12 @@ from object_tracking import ObjectTracker, draw_tracks, _box_diag, _wrist
 # CONFIG
 # ============================================================
 
-# Colors (task 15 — user text se ya UI selector se)
+# Colors (task 15 — from user text or the UI selector)
 COLOR_WORDS = {
-    "red": ["red", "laal"],
-    "blue": ["blue", "neela"],
-    "green": ["green", "hara"],
-    "yellow": ["yellow", "peela"],
+    "red": ["red"],
+    "blue": ["blue"],
+    "green": ["green"],
+    "yellow": ["yellow"],
 }
 
 # Sort/arrange UI options (task 14/19)
@@ -71,33 +71,34 @@ SORTABLE_OBJECTS = ["bottle", "cup", "book", "cell phone",
 DEFAULT_MULTIPLE_COUNT = 3     # tasks 17/18/26
 DEFAULT_SORT_TARGETS = 2       # task 14 (containers needed)
 
-MIN_OBJECT_CONF = 0.30         # required object ka min YOLO confidence
+MIN_OBJECT_CONF = 0.30         # min YOLO confidence for the required object
 MIN_CONTAINER_CONF = 0.30
-# Table/webcam-angle ke liye alag threshold + avg-smoothing (YOLO
-# webcam views par dining table ko sirf 0.07-0.11 deta hai — live
-# verified. avg_confidence persistent weak signal ko accept karta hai,
-# ek-frame noise ko nahi).
+# Separate threshold + avg-smoothing for table/webcam-angle (YOLO
+# gives dining table only 0.07-0.11 in webcam views — live
+# verified. avg_confidence accepts a persistent weak signal,
+# not one-frame noise).
 MIN_TABLE_CONF = 0.08
 MIN_PERSON_COUNT = 2           # handoff tasks
 
-# Pick ke liye lift threshold ka cap (px): bade boxes ke liye
-# 0.3*diag physically bahut bada ho jaata hai (live test me 134px).
+# Cap (px) for the pick lift threshold: for large boxes 0.3*diag
+# becomes physically too large (134px in a live test).
 # ~60px ≈ 6-8cm at desk distance — reachable for any object size.
 PICK_LIFT_CAP_PX = 60.0
 
-# SUSTAINED-HOLD fallback: object haath me itne LAGATAR frames tak
-# rahe (wrist/elbow proximity sustain) to pick maano — baseline ke
-# baad lift na ho to bhi (object run-start me pehle se haath me ho
-# sakta hai; "4+ second tak hold karna bina uthaye impossible hai").
+# SUSTAINED-HOLD fallback: if the object stays in the hand for this
+# many CONSECUTIVE frames (wrist/elbow proximity sustained), treat it
+# as a pick — even without a lift after the baseline (the object may
+# already be in the hand at run start; "holding for 4+ seconds
+# without lifting is impossible").
 SUSTAINED_HOLD_FRAMES = 45
 
-# COCO me 'box' class NAHI hai — real container classes:
+# COCO has NO 'box' class — real container classes:
 CONTAINER_CLASSES = [
     "bowl", "cup", "vase", "sink",
     "refrigerator", "microwave", "oven",
 ]
 
-# Handoff: receiver ke haath object ke itne paas hon (px scale-free)
+# Handoff: the receiver's hand must be this close to the object (px, scale-free)
 HANDOFF_NEAR_FRAMES = 4        # sliding window confirmations
 
 
@@ -112,7 +113,7 @@ TASK_LIBRARY = {
         "phrases": ["pick up the bottle", "pick up bottle",
                     "pick up a bottle", "pick a bottle",
                     "pick the bottle", "grab the bottle",
-                    "lift the bottle", "bottle uthao"],
+                    "lift the bottle", "take the bottle"],
         "requires": ["bottle"],
     },
     "pick_object": {
@@ -127,7 +128,7 @@ TASK_LIBRARY = {
         "label": "Place Object Inside a Box",
         "phrases": ["place object inside box", "put object in box",
                     "place object in the box", "put it in the box",
-                    "place inside box", "box me rakho",
+                    "place inside box", "put in the box",
                     "pick up the bottle and place it inside a box",
                     "pick the bottle and place it inside a box",
                     "place the bottle inside a box",
@@ -137,7 +138,7 @@ TASK_LIBRARY = {
     "remove_object_box": {
         "label": "Remove Object from a Box",
         "phrases": ["remove object from box", "take object out of box",
-                    "take out from box", "object bahar nikalo",
+                    "take out from box", "take the object out",
                     "take the bottle out of the box",
                     "take the bottle out of box",
                     "remove the bottle from the box",
@@ -148,7 +149,7 @@ TASK_LIBRARY = {
     "move_a_to_b": {
         "label": "Move Object A to Location B",
         "phrases": ["move object", "move the object",
-                    "object ko idhar se udhar", "relocate object"],
+                    "move this object", "relocate object"],
         "requires": ["any object"],
     },
     "bottle_on_table": {
@@ -156,12 +157,12 @@ TASK_LIBRARY = {
         "phrases": ["put bottle on table", "place bottle on table",
                     "put the bottle on the table",
                     "place the bottle on the table",
-                    "bottle table par rakho", "keep bottle on the table"],
+                    "put the bottle on a table", "keep bottle on the table"],
         "requires": ["bottle", "table/dining table"],
     },
     "tool_to_container": {
         "label": "Pick Up Tool, Place in Container",
-        "phrases": ["pick up tool", "tool ko container me",
+        "phrases": [                    "pick up tool", "put the tool in a container",
                     "place tool in container", "put tool in container"],
         "requires": ["tool-like object", "container"],
     },
@@ -170,7 +171,7 @@ TASK_LIBRARY = {
         "label": "Hand Object to Another Person",
         "phrases": ["hand object to another person",
                     "give object to another person",
-                    "hand over the object", "object do dusre person ko",
+                    "hand over the object", "give the object to someone else",
                     "give it to someone"],
         "requires": ["object", "two persons"],
     },
@@ -178,7 +179,7 @@ TASK_LIBRARY = {
         "label": "Receive Object from Another Person",
         "phrases": ["receive object from another person",
                     "take object from another person",
-                    "object lo dusre person se"],
+                    "take the object from someone else"],
         "requires": ["object", "two persons"],
     },
     # ---- marked location ----
@@ -186,13 +187,13 @@ TASK_LIBRARY = {
         "label": "Place Object on Marked Location",
         "phrases": ["place object on marked location",
                     "put object on marked location",
-                    "marked location par rakho"],
+                    "put it on the marked location"],
         "requires": ["any object", "marked location"],
     },
     "remove_marked_location": {
         "label": "Remove Object from Marked Location",
         "phrases": ["remove object from marked location",
-                    "marked location se hatao",
+                    "remove from the marked location",
                     "pick up from marked location"],
         "requires": ["any object", "marked location"],
     },
@@ -200,7 +201,7 @@ TASK_LIBRARY = {
     "sort_containers": {
         "label": "Sort Objects into Containers",
         "phrases": ["sort objects", "sort the objects",
-                    "objects ko alag containers me"],
+                    "objects into different containers"],
         "requires": ["objects", f"{DEFAULT_SORT_TARGETS}+ containers"],
     },
     "color_matching": {
@@ -214,67 +215,67 @@ TASK_LIBRARY = {
     "carry_a_to_b": {
         "label": "Carry Object from A to B",
         "phrases": ["carry object", "carry the object",
-                    "object lekar jao"],
+                    "carry the object with you"],
         "requires": ["any object"],
     },
     # ---- multiple objects ----
     "place_multiple_container": {
         "label": "Place Multiple Objects into Container",
         "phrases": ["place multiple objects", "put multiple objects",
-                    "kai objects container me"],
+                    "put several objects in the container"],
         "requires": ["objects", "container"],
     },
     "remove_multiple_container": {
         "label": "Remove Multiple Objects from Container",
         "phrases": ["remove multiple objects",
                     "take out multiple objects",
-                    "kai objects bahar nikalo"],
+                    "take several objects out"],
         "requires": ["container", "objects"],
     },
     # ---- arrange ----
     "arrange_order": {
         "label": "Arrange Objects in Specified Order",
         "phrases": ["arrange objects", "arrange in order",
-                    "objects ko order me lagao"],
+                    "put the objects in order"],
         "requires": ["objects", "order selection"],
     },
     # ---- inspect ----
     "inspect_object": {
         "label": "Pick Up, Inspect/Hold, Place Back",
         "phrases": ["inspect object", "pick up and inspect",
-                    "hold and place back", "object check karo"],
+                    "hold and place back", "check the object"],
         "requires": ["any object"],
     },
     # ---- touch / point ----
     "touch_object": {
         "label": "Touch a Designated Object",
         "phrases": ["touch object", "touch the object",
-                    "object ko chhuo", "touch a designated object"],
+                    "tap the object", "touch a designated object"],
         "requires": ["any object"],
     },
     "point_object": {
         "label": "Point to a Designated Object",
         "phrases": ["point to object", "point at the object",
-                    "point to a designated object", "object ki taraf ishara"],
+                    "point to a designated object", "point toward the object"],
         "requires": ["any object"],
     },
     # ---- transfer ----
     "transfer_containers": {
         "label": "Transfer Object Between Two Containers",
         "phrases": ["transfer object between containers",
-                    "object ek container se dusre me",
+                    "move the object to the other container",
                     "transfer between boxes"],
         "requires": ["any object", "two containers"],
     },
     "collect_one_by_one": {
         "label": "Collect Objects One by One",
         "phrases": ["collect objects", "collect objects one by one",
-                    "objects ek ek karke"],
+                    "collect the objects one at a time"],
         "requires": ["objects"],
     },
     "pick_move_workstation": {
         "label": "Pick Tool, Move to Workstation",
-        "phrases": ["move tool to workstation", "tool workstation le jao",
+        "phrases": [                    "move tool to workstation", "take the tool to the workstation",
                     "pick up tool and move"],
         "requires": ["tool-like object", "workstation region"],
     },
@@ -284,46 +285,46 @@ TASK_LIBRARY = {
                     "move bottle from place 1 to place 2",
                     "move the bottle from one place to another",
                     "move bottle from one place to another",
-                    "bottle ko place 1 se place 2 le jao"],
+                    "carry the bottle from place 1 to place 2"],
         "requires": ["bottle", "place 1 = left third of view, "
                      "place 2 = right third"],
     },
 }
 
 # ------------------------------------------------------------
-# UNSUPPORTED — honest reasons (fake rules nahi)
+# UNSUPPORTED — honest reasons (no fake rules)
 # ------------------------------------------------------------
 
 UNSUPPORTED_TASKS = {
     "open_container": {
         "label": "Open a Box/Container",
-        "reason": ("Lid open state RGB camera se reliably observable "
-                   "nahi hai — COCO objects sirf box/bottle dete hain, "
-                   "lid state nahi. Reliable rule banana possible nahi."),
+        "reason": ("The lid-open state is not reliably observable from "
+                   "an RGB camera — COCO objects only give box/bottle, "
+                   "not lid state. A reliable rule is not possible."),
     },
     "close_container": {
         "label": "Close a Box/Container",
-        "reason": ("Lid closed state RGB se verify nahi hota — "
-                   "open/close ke pose rules unreliable honge."),
+        "reason": ("The lid-closed state cannot be verified from RGB — "
+                   "open/close pose rules would be unreliable."),
     },
     "push_object": {
         "label": "Push Object",
-        "reason": ("Push vs pull direction person-facing par depend "
-                   "karta hai jo single RGB camera se pata nahi. "
-                   "Ye INFERRED hota — isliye unsupported."),
+        "reason": ("Push vs pull direction depends on the person's "
+                   "facing, which a single RGB camera cannot know. "
+                   "It would be INFERRED — hence unsupported."),
     },
     "pull_object": {
         "label": "Pull Object",
-        "reason": ("Push vs pull direction person-facing par depend "
-                   "karta hai jo single RGB camera se pata nahi. "
-                   "Ye INFERRED hota — isliye unsupported."),
+        "reason": ("Push vs pull direction depends on the person's "
+                   "facing, which a single RGB camera cannot know. "
+                   "It would be INFERRED — hence unsupported."),
     },
     "maintenance_procedure": {
         "label": "Complete a Multi-Step Maintenance Procedure",
-        "reason": ("Maintenance steps domain-specific hote hain — "
-                   "generic RGB sensors se unhe verify karna "
-                   "unreliable hoga. Iske bajaye Multi-Step Task mode "
-                   "me specific steps banaye ja sakte hain."),
+        "reason": ("Maintenance steps are domain-specific — verifying "
+                   "them from generic RGB sensors would be unreliable. "
+                   "Instead, specific steps can be defined in "
+                   "Multi-Step Task mode."),
     },
 }
 
@@ -342,23 +343,23 @@ def _clean(text):
 
 def parse_object_task(task_text):
     """
-    Free text -> (task_key ya None, detail_dict)
+    Free text -> (task_key or None, detail_dict)
 
-    detail_dict me color/count jaise parameters aa sakte hain.
-    Whitelisted phrases ke alawa kuch bhi match nahi hota —
-    unknown tasks honestly unsupported return hote hain.
+    detail_dict may carry parameters like color/count.
+    Nothing matches outside the whitelisted phrases —
+    unknown tasks honestly return unsupported.
     """
     text = _clean(task_text)
 
     if not text:
         return None, {}
 
-    # ---- unsupported tasks pehle (honest rejection) ----
+    # ---- unsupported tasks first (honest rejection) ----
     unsupported_map = {
         "open_container": ["open box", "open the box", "open container",
-                           "open the container", "kholo box"],
+                           "open the container", "open up the box"],
         "close_container": ["close box", "close the box", "close container",
-                            "close the container", "band karo box"],
+                            "close the container", "shut the box"],
         "push_object": ["push object", "push the object", "push it"],
         "pull_object": ["pull object", "pull the object", "pull it"],
         "maintenance_procedure": [
@@ -409,7 +410,7 @@ def parse_object_task(task_text):
 
 
 def get_task_requirements(task_key):
-    """Task ke physical requirements (UI + honest failure reasons)."""
+    """Physical requirements of the task (UI + honest failure reasons)."""
     if task_key in TASK_LIBRARY:
         return TASK_LIBRARY[task_key]["requires"]
     if task_key in UNSUPPORTED_TASKS:
@@ -422,7 +423,7 @@ def get_task_requirements(task_key):
 # ============================================================
 
 def _kp(keypoints, name):
-    """Named keypoint (dict ya 17-array). Invalid -> None."""
+    """Named keypoint (dict or 17-array). Invalid -> None."""
     idx_map = {
         "nose": 0,
         "left_shoulder": 5, "right_shoulder": 6,
@@ -476,8 +477,8 @@ def _torso(keypoints):
 
 def _hand_near_point(keypoints, point, scale_torso, radius_factor=0.55):
     """
-    Koi wrist given point ke paas hai?
-    Returns (bool, side, dist) — closest hand.
+    Is any wrist near the given point?
+    Returns (bool, side, dist) — the closest hand.
     """
     if point is None:
         return False, None, None
@@ -502,9 +503,9 @@ def _hand_near_point(keypoints, point, scale_torso, radius_factor=0.55):
 
 def _find_free_hand(persons, exclude_track):
     """
-    Kisi bhi free person ki free hand (object ke liye reach karne wali).
-    exclude_track ke current holder ko count nahi karte.
-    Returns list of (person_index, side, wrist_xy).
+    The free hand of any free person (about to reach for the object).
+    The current holder of exclude_track is not counted.
+    Returns a list of (person_index, side, wrist_xy).
     """
     hands = []
 
@@ -527,7 +528,7 @@ def _find_free_hand(persons, exclude_track):
 
 
 def _wrist_raised(keypoints, side, torso):
-    """Wrist shoulder se upar hai? (inspect/hold-up gesture)"""
+    """Is the wrist above the shoulder? (inspect/hold-up gesture)"""
     shoulder = _kp(keypoints, f"{side}_shoulder")
     wrist = _wrist(keypoints, side)
 
@@ -539,9 +540,9 @@ def _wrist_raised(keypoints, side, torso):
 
 def _pointing_pose(keypoints, side, torso):
     """
-    Pointing pose: shoulder-elbow-wrist lagbhag seedhi line (>= 140 deg)
-    AND arm horizontal-ish se upar (wrist elbow se kam se kam 0.6*torso
-    door + shoulder level ke upar ya level par).
+    Pointing pose: shoulder-elbow-wrist roughly a straight line
+    (>= 140 deg) AND the arm at or above horizontal-ish (the wrist at
+    least 0.6*torso from the elbow + at or above shoulder level).
     """
     shoulder = _kp(keypoints, f"{side}_shoulder")
     elbow = _kp(keypoints, f"{side}_elbow")
@@ -564,9 +565,9 @@ def _pointing_pose(keypoints, side, torso):
 
     angle = math.degrees(math.acos(cos_a))
 
-    # Sirf seedha-elbow + upar-vala arm hi pointing hai. Forearm
-    # (elbow->wrist) ka length ~0.45-0.65 x torso hota hai — 0.8
-    # biomechanically reachable nahi (live test me kabhi fire nahi hua).
+    # Only a straight-elbow + raised arm counts as pointing. The
+    # forearm (elbow->wrist) length is ~0.45-0.65 x torso — 0.8 is
+    # not biomechanically reachable (never fired in a live test).
     arm_extended = mag_bc >= 0.45 * torso
     arm_level = wrist[1] <= shoulder[1] + 0.35 * torso
 
@@ -574,15 +575,15 @@ def _pointing_pose(keypoints, side, torso):
 
 
 # ============================================================
-# EVIDENCE EVALUATION (ek frame ka sab kuch yahin nikalta hai)
+# EVIDENCE EVALUATION (everything for one frame is computed here)
 # ============================================================
 
 def evaluate_evidence(context):
     """
-    Current frame ka pura evidence — ek hi jagah, taaki sab handlers
-    same data par kaam karein (consistent + fast).
+    The complete evidence for the current frame — in one place, so all
+    handlers work on the same data (consistent + fast).
 
-    context: ObjectTaskContext (camera.py banata hai)
+    context: ObjectTaskContext (built by camera.py)
     """
     tracker = context.tracker
     persons = context.persons or []
@@ -653,12 +654,12 @@ def evaluate_evidence(context):
 
 def _detect_container(context):
     """
-    Task ke liye container dhundo (box/bowl/cup + marked location).
+    Find a container for the task (box/bowl/cup + marked location).
     Returns (region_box, label, failure_reason, container_track).
 
-    container_track None ho sakta hai (marked location). Handlers ko
-    placement loops me ISE SKIP karna chahiye — warna container apne
-    aap ko "placed object" ban jaata hai (false positive).
+    container_track can be None (marked location). Handlers must SKIP
+    it in placement loops — otherwise the container becomes its own
+    "placed object" (false positive).
     """
     tracker = context.tracker
 
@@ -687,9 +688,9 @@ def _detect_container(context):
 
 def _detect_table(context):
     """
-    Table jaisa flat surface — returns (region, label, err, track).
-    Table conf webcam-angle par weak hota hai — avg_confidence
-    (smoothed) + MIN_TABLE_CONF use karta hai.
+    A table-like flat surface — returns (region, label, err, track).
+    Table confidence is weak at webcam angles — uses avg_confidence
+    (smoothed) + MIN_TABLE_CONF.
     """
     tracker = context.tracker
 
@@ -728,11 +729,11 @@ def _detect_table(context):
 
 # ============================================================
 # TASK HANDLERS
-# Ek handler: (context, ev) -> (detected, confidence, reasons)
+# One handler: (context, ev) -> (detected, confidence, reasons)
 # ============================================================
 
 def _person_conf(context, track=None):
-    """Base person confidence (0-100) — detection quality ka real signal."""
+    """Base person confidence (0-100) — a real detection-quality signal."""
     persons = context.persons or []
 
     if not persons:
@@ -764,7 +765,7 @@ def _person_conf(context, track=None):
 def _score(context, track, geometry_score, detected):
     """
     Confidence blend: YOLO person conf + object conf + geometry score.
-    Real measurements only — koi random value nahi.
+    Real measurements only — no random values.
     """
     person_conf = _person_conf(context, track) / 100.0
 
@@ -921,7 +922,7 @@ def h_place_object_box(context, ev):
         if container_tr is not None and (
             track.track_id == container_tr.track_id
         ):
-            continue  # container khud ko "placed object" na bane
+            continue  # the container must not become its own "placed object"
 
         if track.inside_box(region, expand=0.05) and track.is_stable(
             frames=4, max_px=8.0
@@ -952,7 +953,7 @@ def h_remove_object_box(context, ev):
     if region is None:
         return False, 0.0, [err]
 
-    # kya koi object pehle box ke andar tha?
+    # was any object inside the box before?
     was_inside = None
 
     for track in context.tracker.tracks:
@@ -974,7 +975,7 @@ def h_remove_object_box(context, ev):
             f"put an object in first, then remove it",
         ]
 
-    # ab wo object bahar + held (ya recently moved out)?
+    # is that object now outside + held (or recently moved out)?
     if was_inside.is_held():
         moved_out = not was_inside.inside_box(region, expand=0.10)
         lift = was_inside.effective_lift_px()
@@ -991,7 +992,7 @@ def h_remove_object_box(context, ev):
                 f"from the {label} (held by hand)",
             ]
 
-    # alternative: koi aur track jo member tha, ab bahar hai
+    # alternative: another track that was a member is now outside
     for container in context.tracker.tracks:
         members = getattr(container, "members", set())
 
@@ -1025,7 +1026,7 @@ def h_move_a_to_b(context, ev):
 def _generic_move(context, ev, min_distance):
     """
     Common move logic:
-      object held tha + significant displacement + ab stable/present.
+      object was held + significant displacement + now stable/present.
     """
     track = ev["any_held"]
 
@@ -1126,7 +1127,7 @@ def h_bottle_on_table(context, ev):
         if surface_tr is not None and (
             bottle.track_id == surface_tr.track_id
         ):
-            continue  # table khud ko bottle na bane
+            continue  # the table must not become the bottle itself
 
         if bottle.near_vertical(surface, tolerance_frac=0.35) and (
             bottle.horizontal_overlap(surface) >= 0.4
@@ -1150,9 +1151,9 @@ def h_move_bottle_places(context, ev):
     Move Bottle: Place 1 -> Place 2 (staged, live-demo reliable).
 
     Place 1 = left third of the view, Place 2 = right third
-    (place regions drawn/green box dikhaya jaata hai live feed par).
+    (the place regions/green boxes are drawn on the live feed).
 
-    Staged pipeline (har stage ke liye consecutive frames chahiye):
+    Staged pipeline (each stage requires consecutive frames):
       1. bottle detected in Place 1
       2. hand near the bottle (pick up)
       3. bottle leaves Place 1 (carried)
@@ -1164,7 +1165,7 @@ def h_move_bottle_places(context, ev):
     tracker = context.tracker
 
     # region boxes: left third / right third of a 640-wide view
-    # (frame width se derive — camera.py 640x480 feed deta hai)
+    # (derived from frame width — camera.py gives a 640x480 feed)
     frame_w = 640.0
     if context.last_frame is not None:
         frame_w = float(context.last_frame.shape[1])
@@ -1183,7 +1184,7 @@ def h_move_bottle_places(context, ev):
     in_p2 = bottle.inside_box(p2, expand=0.05)
     held = bottle.is_held()
 
-    # ---- stage 1+2: bottle Place 1 me tha + haath paas aaya ----
+    # ---- stage 1+2: bottle was in Place 1 + hand came near ----
     if in_p1 and not held:
         return False, 0.0, [
             "Stage 1/6: Bottle is in Place 1 (left) — reach and "
@@ -1195,7 +1196,7 @@ def h_move_bottle_places(context, ev):
             "Stage 2/6: Hand on bottle — lift and carry it right",
         ]
 
-    # ---- stage 3-5: bottle carry ho rahi hai / Place 2 me aa rahi ----
+    # ---- stage 3-5: bottle being carried / entering Place 2 ----
     if held and not in_p2:
         carried = bottle.carry_displacement()
         return False, 0.0, [
@@ -1203,7 +1204,7 @@ def h_move_bottle_places(context, ev):
             f"({carried:.0f} px so far) — take it to Place 2 (right)",
         ]
 
-    # ---- stage 5+6: Place 2 me pahunchi, ab stable + free ----
+    # ---- stage 5+6: reached Place 2, now stable + free ----
     if in_p2 and not held:
         if bottle.is_stable(frames=4, max_px=8.0):
             moved = max(
@@ -1229,7 +1230,7 @@ def h_move_bottle_places(context, ev):
             "let go (keep hands away)",
         ]
 
-    # bottle kahin aur (middle)
+    # bottle somewhere else (middle)
     return False, 0.0, [
         "Bottle in the middle — Place 1 is LEFT, "
         "Place 2 is RIGHT",
@@ -1270,7 +1271,7 @@ def h_tool_to_container(context, ev):
         if container_tr is not None and (
             tool.track_id == container_tr.track_id
         ):
-            continue  # container khud ko tool na bane
+            continue  # the container must not become the tool itself
 
         if tool.inside_box(region, expand=0.05) and tool.is_stable(
             frames=4, max_px=8.0
@@ -1288,16 +1289,16 @@ def h_tool_to_container(context, ev):
 
 def h_pick_move_workstation(context, ev):
     """
-    Tool -> workstation region ke paas.
-    (camera.py ise 'workstation' marked-location/container ke saath
-     use karta hai; tool ke saath move bhi measure hota hai)
+    Tool -> near the workstation region.
+    (camera.py uses this with a 'workstation' marked location/container;
+     the movement with the tool is also measured)
     """
     tools = context.tracker.of_class(TOOL_CLASSES, MIN_OBJECT_CONF)
 
     if not tools:
         return False, 0.0, ["No tool-like object detected"]
 
-    # workstation = ya container jaisa region, ya marked location
+    # workstation = either a container-like region or a marked location
     region, label, _, container_tr = _detect_container(context)
 
     if region is None:
@@ -1321,7 +1322,7 @@ def h_pick_move_workstation(context, ev):
         if container_tr is not None and (
             tool.track_id == container_tr.track_id
         ):
-            continue  # container khud ko tool na bane
+            continue  # the container must not become the tool itself
 
         at_station = tool.inside_box(region, expand=0.35) or (
             tool.near_vertical(region, 0.5)
@@ -1353,7 +1354,7 @@ def h_handoff_person(context, ev):
     held = ev["any_held"]
 
     if held is not None:
-        # giver holds; receiver ka haath paas?
+        # giver holds; is the receiver's hand near?
         giver = held.held_by
         giver_pid = giver.get("person_id") if giver else None
 
@@ -1382,13 +1383,13 @@ def h_handoff_person(context, ev):
             "Object held but receiver's hand is not close",
         ]
 
-    # ab koi hold nahi karta — kya recently transfer hua?
+    # nobody holds it now — was it recently transferred?
     for track in ev["free_tracks"]:
         if track.class_name == "person":
             continue
 
         if len(track.holder_history) >= 1 and track.ever_held:
-            # transfer ke baad object stable + kisi ke haath me nahi
+            # after transfer the object is stable + in nobody's hand
             if track.is_stable(frames=3, max_px=10.0):
                 return True, _score(context, track, 0.7, True), [
                     f"Object '{track.class_name}' transferred: "
@@ -1402,7 +1403,7 @@ def h_handoff_person(context, ev):
 
 
 def h_receive_person(context, ev):
-    # receive = wahi handoff, dusre person ke perspective se
+    # receive = the same handoff, from the other person's perspective
     return h_handoff_person(context, ev)
 
 
@@ -1499,7 +1500,7 @@ def h_sort_containers(context, ev):
             f"(found {len(containers)})"
         ]
 
-    # different containers me different objects hue?
+    # did different containers get different objects?
     occupied = set()
     details = []
 
@@ -1531,8 +1532,8 @@ def h_color_matching(context, ev):
     if color is None:
         return False, 0.0, [
             "Select a color first (Color selector in the "
-            "Task Library) — RGB se color hints detect karna "
-            "reliable nahi"
+            "Task Library) — detecting color hints from RGB "
+            "is not reliable"
         ]
 
     containers = context.tracker.containers(
@@ -1542,11 +1543,11 @@ def h_color_matching(context, ev):
     if not containers:
         return False, 0.0, ["No box/container detected in frame"]
 
-    # IMPORTANT HONEST NOTE: COCO colors nahi deta. Color attribute
-    # ko hum single dominant hue se (HSV) measure karte hain — ye
-    # REAL measurement hai, random nahi, par lighting-sensitive.
-    # Object ko target container ke andar stable hona + user-ne-
-    # chuna color match karna dono chahiye.
+    # IMPORTANT HONEST NOTE: COCO does not give colors. We measure the
+    # color attribute from a single dominant hue (HSV) — a REAL
+    # measurement, not random, but lighting-sensitive. The object must
+    # be stable inside the target container AND match the user-chosen
+    # color.
     placed = None
 
     for track in ev["free_tracks"]:
@@ -1568,7 +1569,7 @@ def h_color_matching(context, ev):
             f"Place the '{color}' object inside the box first"
         ]
 
-    # color measure (real HSV analysis — object_tasks se)
+    # color measure (real HSV analysis — from object_tasks)
     measured = context.measure_object_color(placed)
 
     if measured is None:
@@ -1677,7 +1678,7 @@ def h_arrange_order(context, ev):
             "(Order selector in Task Library)"
         ]
 
-    # target objects dhundo
+    # find the target objects
     tracks = []
 
     for name in order:
@@ -1726,13 +1727,13 @@ def h_transfer_containers(context, ev):
 
     c1, c2 = containers[0], containers[1]
 
-    # koi object pehle c1 me tha, ab c2 me hai?
+    # was an object in c1 before and is it in c2 now?
     for track in context.tracker.tracks:
         if track.class_name == "person":
             continue
 
         if track.track_id in (c1.track_id, c2.track_id):
-            continue  # containers khud object na banein
+            continue  # the containers must not become the object themselves
 
         if track.was_inside_box(c1.box, expand=0.05) and track.inside_box(
             c2.box, expand=0.05
@@ -1929,13 +1930,13 @@ VERIFIED_OBJECT_TASKS = sorted(TASK_LIBRARY.keys())
 
 
 # ============================================================
-# CONTEXT + BRIDGE (camera.py ise use karta hai)
+# CONTEXT + BRIDGE (used by camera.py)
 # ============================================================
 
 class ObjectTaskContext:
     """
-    Ek verification run ka shared context.
-    camera.py har batch frame ke saath update karta hai.
+    Shared context for one verification run.
+    camera.py updates it with every batch frame.
     """
 
     def __init__(self, tracker, marked_location=None, chosen_color=None,
@@ -1952,16 +1953,16 @@ class ObjectTaskContext:
             container_classes
             if container_classes is not None else CONTAINER_CLASSES
         )
-        self.last_frame = None                      # color measurement ke liye
+        self.last_frame = None                      # for color measurement
 
-        # task 15 color verification ke liye (real HSV measurement)
+        # for task 15 color verification (real HSV measurement)
         self._color_cache = {}
 
     def measure_object_color(self, track):
         """
-        Object ke box ka dominant color (REAL HSV measurement,
+        Dominant color of the object's box (REAL HSV measurement,
         cached per track). Returns 'red'/'blue'/'green'/'yellow'
-        ya None (unreliable).
+        or None (unreliable).
         """
         if track.track_id in self._color_cache:
             return self._color_cache[track.track_id]
@@ -2014,7 +2015,7 @@ class ObjectTaskContext:
 
 
 def get_step_action(session):
-    """Current step ka object-task action key (ya None)."""
+    """The current step's object-task action key (or None)."""
     step = session.current_step()
 
     if step is None:
@@ -2025,14 +2026,14 @@ def get_step_action(session):
 
 def check_object_task_step(session, context):
     """
-    camera.py bridge — current step ka object-task verification.
+    camera.py bridge — object-task verification of the current step.
 
-    NOTE: temporal window / completion logic ka OWNER
-    TaskVerificationSession.process_persons() hai (pose path ke saath
-    shared). Ye function sirf ek-frame detection deta hai.
+    NOTE: the OWNER of the temporal window / completion logic is
+    TaskVerificationSession.process_persons() (shared with the pose
+    path). This function only returns one-frame detection.
 
     Returns:
-        None  -> step object-task nahi hai (pose path use hoga)
+        None  -> the step is not an object-task (the pose path will be used)
         dict  -> {detected, confidence, reasons, is_object_task}
     """
     action = get_step_action(session)
@@ -2040,7 +2041,7 @@ def check_object_task_step(session, context):
     if action is None or action not in HANDLERS:
         return None
 
-    # evidence evaluate karo (ek jagah, sab handlers ke liye)
+    # evaluate the evidence (one place, for all handlers)
     ev = evaluate_evidence(context)
 
     try:
@@ -2059,7 +2060,7 @@ def check_object_task_step(session, context):
 
 
 def _summarize_context(context):
-    """UI ke liye chhota context summary (debug panel)."""
+    """Short context summary for the UI (debug panel)."""
     tracker = context.tracker
 
     return {

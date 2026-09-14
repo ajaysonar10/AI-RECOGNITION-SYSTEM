@@ -1,16 +1,17 @@
 """
-Task Verification ka simulation test (bina camera ke).
+Simulation test for Task Verification (without a camera).
 
-Synthetic keypoints bana kar check karta hai (test_walking_fix.py jaisa):
-  1. "Raise your right hand" sirf tabhi COMPLETE hota hai jab right
-     wrist sach me shoulder ke upar ho (geometry check).
-  2. Temporal confirmation — 1-2 sahi frames se task COMPLETE nahi hota,
-     TASK_CONFIRM_FRAMES consecutive frames chahiye.
-  3. Person frame se gayab -> streak hold hota hai (false-positive safe).
-  4. Wrong pose (left hand raised, right task) -> COMPLETE nahi hota.
-  5. Multi-step sequential enforcement — Step 2/3 LOCKED rehte hain,
-     sirf current step verify hota hai.
-  6. Reset behavior — sab steps NOT COMPLETED, Step 1 IN PROGRESS.
+Builds synthetic keypoints and checks (like test_walking_fix.py):
+  1. "Raise your right hand" completes ONLY when the right wrist is
+     genuinely above the shoulder (geometry check).
+  2. Temporal confirmation — 1-2 correct frames do not complete the
+     task; TASK_CONFIRM_FRAMES consecutive frames are required.
+  3. Person disappears from the frame -> the streak holds
+     (false-positive safe).
+  4. Wrong pose (left hand raised, right task) -> does NOT complete.
+  5. Multi-step sequential enforcement — Steps 2/3 stay LOCKED;
+     only the current step is verified.
+  6. Reset behavior — all steps NOT COMPLETED, Step 1 IN PROGRESS.
 
 Run:  python test_task_verification.py
 """
@@ -45,7 +46,7 @@ def make_person(keypoints, person_conf=90.0, activity="Standing",
 
 
 def standing_keypoints():
-    """Seedha khada person (px coordinates, y neeche badhta hai)."""
+    """Person standing straight (px coordinates, y grows downward)."""
     return {
         "nose": (320, 80),
         "left_shoulder": (270, 150), "right_shoulder": (370, 150),
@@ -58,7 +59,7 @@ def standing_keypoints():
 
 
 def sitting_keypoints():
-    """Chair par baitha person — hips knee-level par, knees bent."""
+    """Person sitting on a chair — hips at knee level, knees bent."""
     return {
         "nose": (320, 150),
         "left_shoulder": (270, 220), "right_shoulder": (370, 220),
@@ -71,10 +72,10 @@ def sitting_keypoints():
 
 
 def right_hand_raised(keep_hips_standing=True):
-    """Standing person jiska right wrist shoulder ke upar hai."""
+    """Standing person whose right wrist is above the shoulder."""
     kp = standing_keypoints() if keep_hips_standing else sitting_keypoints()
     kp["right_elbow"] = (410, 80)
-    kp["right_wrist"] = (420, 20)     # shoulder (150) se ~130px upar
+    kp["right_wrist"] = (420, 20)     # ~130px above the shoulder (150)
     return kp
 
 
@@ -100,7 +101,7 @@ def check(name, condition, detail=""):
 
 
 def feed_frames(session, persons, frames):
-    """N frames tak same person list feed karo, results wapas do."""
+    """Feed the same person list for N frames; return the results."""
     results = []
     for _ in range(frames):
         results.append(session.process_persons(persons))
@@ -183,24 +184,24 @@ session = TaskVerificationSession(["Raise your right hand"])
 check("Initial state IN PROGRESS",
       session.steps[0]["state"] == "IN PROGRESS")
 
-# Ek frame detected — abhi COMPLETE nahi hona chahiye
+# One frame detected — must NOT be COMPLETE yet
 r = session.process_persons([make_person(right_hand_raised())])
 check("1 good frame -> still IN PROGRESS (no false positive)",
       not r["step_completed"] and r["streak"] == 1)
 
-# Kam frames (aadhe) — abhi bhi nahi
+# Too few frames (half) — still not completed
 feed_frames(session, [make_person(right_hand_raised())],
             TASK_CONFIRM_FRAMES // 2 - 1)
 check(f"{TASK_CONFIRM_FRAMES // 2} good frames -> still not completed",
       not session.steps[0]["state"] == "COMPLETED")
 
-# Galat pose 1 frame — streak decay hota hai par complete nahi
+# One wrong-pose frame — the streak decays but does not complete
 session.process_persons(make_person(standing_keypoints()))
 check("Wrong-pose frame does not complete the step",
       session.steps[0]["state"] != "COMPLETED")
 
-# Ab lagatar sahi frames — sliding window me 12 detections
-# poore hote hi complete ho jaana chahiye (flicker ke baad bhi)
+# Now consecutive correct frames — as soon as the sliding window
+# fills 12 detections it should complete (even after flicker)
 completion_result = None
 for i in range(TASK_CONFIRM_FRAMES + 2):
     r = session.process_persons([make_person(right_hand_raised())])
@@ -231,14 +232,14 @@ session2 = TaskVerificationSession(["Stand"])
 for i in range(TASK_CONFIRM_FRAMES - 2):
     session2.process_persons(make_person(standing_keypoints()))
 
-# 3 frame ke liye person gayab
+# Person absent for 3 frames
 for i in range(3):
     r = session2.process_persons([])
 check("Person missing -> streak held (not reset, not completed)",
       0 < r["streak"] < TASK_CONFIRM_FRAMES,
       f"(streak={r['streak']})")
 
-# Wapas aakar confirm karo
+# Return and confirm
 for i in range(3):
     r = session2.process_persons(make_person(standing_keypoints()))
 check("Streak resumes -> task completes after full confirmation",
@@ -256,15 +257,15 @@ check("Initial: Step 1 IN PROGRESS", states[0][1] == "IN PROGRESS")
 check("Initial: Step 2 LOCKED", states[1][1] == "LOCKED")
 check("Initial: Step 3 LOCKED", states[2][1] == "LOCKED")
 
-# Step 2 ka pose do (RIGHT HAND UP par baitha hua — taaki wo
-# Step 1 'Stand up' se match NA kare) — LOCKED hai, kuch nahi hoga
+# Give the Step 2 pose (RIGHT HAND UP while seated — so it does
+# NOT match Step 1 'Stand up') — it is LOCKED, nothing should happen
 feed_frames(session3,
             [make_person(right_hand_raised(keep_hips_standing=False))],
             TASK_CONFIRM_FRAMES + 5)
 check("Future step pose ignored while Step 1 active",
       session3.current_index == 0)
 
-# Step 1 (Stand) complete karo
+# Complete Step 1 (Stand)
 for i in range(TASK_CONFIRM_FRAMES):
     r = session3.process_persons(make_person(standing_keypoints()))
 
@@ -276,14 +277,14 @@ check("Step 3 still LOCKED",
       session3.steps[2]["state"] == "LOCKED")
 check("Not all completed yet", not r["all_completed"])
 
-# Step 3 ka pose (sitting) do — Step 2 abhi pending hai
+# Give the Step 3 pose (sitting) — Step 2 is still pending
 feed_frames(session3, [make_person(sitting_keypoints())],
             TASK_CONFIRM_FRAMES + 5)
 check("Step 3 pose ignored while Step 2 active",
       session3.steps[1]["state"] == "IN PROGRESS"
       and session3.steps[2]["state"] == "LOCKED")
 
-# Step 2 (right hand) complete karo
+# Complete Step 2 (right hand)
 for i in range(TASK_CONFIRM_FRAMES):
     r = session3.process_persons(make_person(right_hand_raised()))
 
@@ -294,7 +295,7 @@ check("Step 3 now IN PROGRESS",
 check("Step 3 NOT COMPLETED before its turn is done",
       session3.steps[2]["state"] != "COMPLETED")
 
-# Step 3 (Sit) complete karo
+# Complete Step 3 (Sit)
 for i in range(TASK_CONFIRM_FRAMES):
     r = session3.process_persons(make_person(sitting_keypoints()))
 

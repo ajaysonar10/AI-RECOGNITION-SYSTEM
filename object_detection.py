@@ -4,12 +4,12 @@ BAS-AI • Object Detection Module
 Detects ALL 80 COCO classes (person, chair, laptop, bottle, cup,
 cell phone, keyboard, book, mouse, ...) — not just persons.
 
-Why "sirf person" dikhta tha:
-1. yolo11n-pose.pt = POSE model hai, wo SIRF person detect karta hai.
-   Yahan hamesha DETECTION model use karo (yolo11n.pt / yolo11s.pt).
-2. conf (confidence) threshold zyada ho to chhote/uncertain objects
-   drop ho jaate hain — isliye ye configurable rakha hai.
-3. classes=[0] filter lagane par bhi sirf person milta hai.
+Why "only persons" appeared earlier:
+1. yolo11n-pose.pt is a POSE model — it ONLY detects persons.
+   Always use a DETECTION model here (yolo11n.pt / yolo11s.pt).
+2. A higher conf (confidence) threshold drops small/uncertain
+   objects — that is why it is kept configurable.
+3. Applying a classes=[0] filter also yields only persons.
 """
 
 import cv2
@@ -21,7 +21,7 @@ from ultralytics import YOLO
 # ============================================================
 
 # Full 80-class COCO DETECTION model.
-# Better accuracy chahiye to "yolo11s.pt" ya "yolo11m.pt" likho.
+# For better accuracy, use "yolo11s.pt" or "yolo11m.pt".
 MODEL_PATH = "yolo11n.pt"
 
 model = YOLO(MODEL_PATH)
@@ -31,12 +31,12 @@ model = YOLO(MODEL_PATH)
 # DETECTION SETTINGS
 # ============================================================
 
-DEFAULT_CONF = 0.30    # confidence threshold (kam = zyada objects milenge)
-DEFAULT_IOU = 0.45     # NMS overlap threshold (duplicate boxes hataata hai)
-DEFAULT_IMGSZ = 640    # image size (bada rakho to small objects better milte hain)
+DEFAULT_CONF = 0.30    # confidence threshold (lower = more objects found)
+DEFAULT_IOU = 0.45     # NMS overlap threshold (removes duplicate boxes)
+DEFAULT_IMGSZ = 640    # image size (higher values find small objects better)
 
-# classes=None  -> ALL 80 COCO classes detect honge  (correct default)
-# classes=[0]   -> sirf person                       (yahi galti hoti hai)
+# classes=None  -> ALL 80 COCO classes are detected  (correct default)
+# classes=[0]   -> only person                       (the common mistake)
 DEFAULT_CLASSES = None
 
 
@@ -48,17 +48,17 @@ def detect_objects(
     classes=DEFAULT_CLASSES,
 ):
     """
-    Frame ke andar ke SAARE objects detect karta hai.
+    Detects ALL objects inside the frame.
 
     Args:
-        frame:   BGR image (numpy array, jaisa cv2 deta hai)
+        frame:   BGR image (numpy array, as given by cv2)
         conf:    confidence threshold (0-1)
         iou:     NMS IoU threshold (0-1)
         imgsz:   inference image size (px)
-        classes: None = sabhi 80 classes, ya [0, 56, ...] specific list
+        classes: None = all 80 classes, or [0, 56, ...] specific list
 
     Returns:
-        annotated_frame: boxes + labels + count ke saath frame
+        annotated_frame: frame with boxes + labels + count
         detections: list of dicts with class_name, confidence, box
     """
 
@@ -73,11 +73,11 @@ def detect_objects(
 
     result = results[0]
 
-    # Detection result ko frame par draw karo (sabhi classes)
+    # Draw the detection result on the frame (all classes)
     annotated_frame = result.plot()
 
     # ------------------------------------------------------------
-    # Detection details nikaalo (app mein dikhane ke liye)
+    # Extract detection details (to show in the app)
     # ------------------------------------------------------------
 
     detections = []
@@ -100,7 +100,7 @@ def detect_objects(
             )
 
     # ------------------------------------------------------------
-    # Frame par summary text (kitne objects mile)
+    # Summary text on the frame (how many objects were found)
     # ------------------------------------------------------------
 
     summary = f"Objects: {len(detections)}"
@@ -119,9 +119,9 @@ def detect_objects(
 
 
 # ============================================================
-# STANDALONE TEST — is file ko direct run karo:
+# STANDALONE TEST — run this file directly:
 #     python object_detection.py
-# Webcam khulegi aur SAARE objects boxes ke saath dikhenge.
+# The webcam opens and ALL objects are shown with boxes.
 # ============================================================
 
 if __name__ == "__main__":

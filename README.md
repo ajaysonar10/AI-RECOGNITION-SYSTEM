@@ -6,23 +6,24 @@ AI powered **Human Activity Recognition System** for real-time monitoring — bu
 
 ## 📖 Overview
 
-BAS•AI ek intelligent on-board AI system hai jo live camera feed se **persons detect** karta hai, unki **position** track karta hai, aur unki **activity** (Standing / Sitting / Walking) **justification ke saath** classify karta hai — sab kuch real-time mein.
+BAS•AI is an intelligent on-board AI system that **detects persons** from a live camera feed, tracks their **position**, and classifies their **activity** (Standing / Sitting / Walking) **with justification** — all in real time.
 
 ---
 
 ## ✨ Features
 
-- 🎯 **Real-time Pose Detection** — YOLO11n-pose se 17 body keypoints (nose, shoulders, hips, knees, ankles...)
-- 👤 **Multi-Person Tracking** — har person ko stable **Track ID** milti hai (frame-to-frame)
-- 📍 **Position Analysis** — bounding box, body center (pixels), aur frame region (jaise `middle-center`)
-- 🧠 **Activity Recognition with Justification** — har decision ke saath transparent reasons:
-  - 🧍 **Standing** — taangein seedhi (knee angle ≥ 155°)
-  - 🪑 **Sitting** — knees mudi hui (knee angle < 125°)
+- 🎯 **Real-time Pose Detection** — 17 body keypoints from YOLO11n-pose (nose, shoulders, hips, knees, ankles...)
+- 👤 **Multi-Person Tracking** — every person gets a stable **Track ID** (frame-to-frame)
+- 📍 **Position Analysis** — bounding box, body center (pixels), and frame region (e.g. `middle-center`)
+- 🧠 **Activity Recognition with Justification** — transparent reasons with every decision:
+  - 🧍 **Standing** — legs straight (knee angle ≥ 155°)
+  - 🪑 **Sitting** — knees bent (knee angle < 125°)
   - 🚶 **Walking** — jitter-proof detection: net displacement + direction consistency + hysteresis (4-frame confirm)
-  - ❓ **Unknown** — legs visible nahi, to galat claim nahi
+  - ❓ **Unknown** — legs not visible, so no false claim
 - 🖥️ **Streamlit Dashboard** — Live Monitor, Activity History, Analytics, System Status
 - 📊 **Live Metrics** — activity, confidence %, persons count, activity stream (1-sec logging)
-- 📱 **Dual Camera Support** — Laptop webcam ya mobile camera (IP Webcam / DroidCam over Wi-Fi)
+- 📱 **Dual Camera Support** — laptop webcam or mobile camera (IP Webcam / DroidCam over Wi-Fi)
+- ✅ **Task Verification** — pose tasks (raise hand, walk...) + 22 object-interaction tasks (pick up bottle, place in box, move Place 1 → Place 2...) verified with real YOLO detection, object tracking and multi-frame temporal confirmation
 
 ---
 
@@ -33,9 +34,12 @@ AI-Recognition-System/
 ├── app.py                    # Streamlit dashboard (main entry)
 ├── camera.py                 # Live camera feed + UI integration
 ├── pose_detection.py         # ⭐ Core: pose + position + activity + justification
-├── activity_detection.py     # Legacy activity logic (pose_detection.py me merged)
+├── activity_detection.py     # Legacy activity logic (merged into pose_detection.py)
 ├── object_detection.py       # Object detection module
-├── live_pose_detection.py    # Standalone webcam demo (bina UI ke)
+├── object_tracking.py        # Object tracking: hold, lift, displacement
+├── object_tasks.py           # Object-interaction task library (22 tasks)
+├── task_detection.py         # Task session: temporal + sequential verification
+├── live_pose_detection.py    # Standalone webcam demo (without UI)
 └── README.md
 ```
 
@@ -55,7 +59,7 @@ for p in persons:
     print(p["keypoints"])          # {name: (x, y)} — 17 COCO keypoints
 ```
 
-Purana interface `detect_pose(frame)` bhi available hai (backward compatible).
+The legacy interface `detect_pose(frame)` is also available (backward compatible).
 
 ---
 
@@ -74,23 +78,23 @@ cd AI-Recognition-System
 streamlit run app.py
 ```
 
-Browser mein `http://localhost:8501` khulega → sidebar se **📡 Live Monitor** → **🟢 Start Camera**
+The browser opens `http://localhost:8501` → sidebar → **📡 Live Monitor** → **🟢 Start Camera**
 
-> ⚠️ Pehli baar run karne par `yolo11n-pose.pt` model (~6 MB) auto-download hoga.
+> ⚠️ On the first run, the `yolo11n-pose.pt` model (~6 MB) auto-downloads.
 
-### Standalone demo (bina UI ke)
+### Standalone demo (without UI)
 
 ```bash
 python pose_detection.py        # webcam + console output (position + justification)
 python live_pose_detection.py   # simple webcam skeleton demo
 ```
 
-### 📱 Mobile camera connect karna
+### 📱 Connecting a mobile camera
 
-1. Phone par **IP Webcam** (ya DroidCam) app install karo
-2. Phone aur laptop **same Wi-Fi** par ho
-3. App mein video stream start karo — IP milega (jaise `192.168.1.5:8080`)
-4. Live Monitor → **Connect with Mobile** → IP + port daalo
+1. Install the **IP Webcam** (or DroidCam) app on your phone
+2. Phone and laptop must be on the **same Wi-Fi**
+3. Start the video stream in the app — you get an IP (e.g. `192.168.1.5:8080`)
+4. Live Monitor → **Connect with Mobile** → enter the IP + port
 
 ---
 
@@ -98,22 +102,22 @@ python live_pose_detection.py   # simple webcam skeleton demo
 
 | Activity | Signal | Threshold |
 |----------|--------|-----------|
-| 🚶 Walking | Body center consistently move karta hai | movement > 4 px/frame **+** net displacement > 25 px **+** direction consistency ≥ 0.55 **+** 4-frame streak |
-| 🪑 Sitting | Knees mudi hui | avg knee angle < 125° |
-| 🧍 Standing | Taangein seedhi | avg knee angle ≥ 155° |
-| ❓ Unknown | Legs clearly visible nahi | — |
+| 🚶 Walking | Body center consistently moving | movement > 4 px/frame **+** net displacement > 25 px **+** direction consistency ≥ 0.55 **+** 4-frame streak |
+| 🪑 Sitting | Knees bent | avg knee angle < 125° |
+| 🧍 Standing | Legs straight | avg knee angle ≥ 155° |
+| ❓ Unknown | Legs not clearly visible | — |
 
-**Walking jitter-proof kyun hai?** Standing ke time body/camera micro-jitter (2–5 px random movement) hota hai. Isliye sirf per-frame movement nahi — **net displacement** (start→end seedha distance) aur **direction consistency** (net ÷ total path) bhi check hote hain. Jitter mein net displacement ~0 hota hai, walking mein bada. Simulation tests se verified ✓
+**Why is Walking jitter-proof?** While standing, the body/camera has micro-jitter (2–5 px random movement). So per-frame movement alone is not enough — **net displacement** (straight start→end distance) and **direction consistency** (net ÷ total path) are also checked. In jitter, net displacement is ~0; while walking it is large. Verified with simulation tests ✓
 
 ---
 
 ## 📊 Dashboard Pages
 
-| Page | Kya hai |
+| Page | What it shows |
 |------|---------|
 | 🏠 Dashboard | Mission overview + recent activity |
-| 📡 Live Monitor | Live video + per-person position & justification |
-| 🕒 Activity History | Saare detections (date/time/activity/confidence/status) |
+| 📡 Live Monitor | Live video + per-person position & justification + task verification |
+| 🕒 Activity History | All detections (date/time/activity/confidence/status) |
 | 📊 Analytics | Activity distribution chart + average confidence |
 
 ---

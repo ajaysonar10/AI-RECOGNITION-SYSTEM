@@ -4,13 +4,13 @@ step_validator.py
 
 Sequential Step Evaluation for BAS•AI.
 
-Fixed activity sequence (Standing -> Walking -> Sitting) ko live camera
-feed ke against validate karta hai:
+Validates a fixed activity sequence (Standing -> Walking -> Sitting)
+against the live camera feed:
 
-  - Sahi step detect hua   -> status "CORRECT"   (sequence aage badhti hai)
-  - Galat step detect hua  -> status "WRONG"     (camera.py voice alert deta hai)
-  - Saare steps complete   -> status "COMPLETED", get_current_step() -> None
-  - Pose unclear (Unknown) -> status "NEUTRAL"   (UI "WAITING" dikhata hai)
+  - Correct step detected  -> status "CORRECT"   (sequence advances)
+  - Wrong step detected    -> status "WRONG"     (camera.py gives a voice alert)
+  - All steps complete     -> status "COMPLETED", get_current_step() -> None
+  - Pose unclear (Unknown) -> status "NEUTRAL"   (UI shows "WAITING")
 """
 
 # ------------------------------------------------------------
@@ -21,36 +21,36 @@ STEP_SEQUENCE = ["Standing", "Walking", "Sitting"]
 
 
 class StepValidator:
-    """Sequential activity validator (Streamlit session_state me store hota hai)."""
+    """Sequential activity validator (stored in Streamlit session_state)."""
 
     def __init__(self, sequence=None):
         self.sequence = list(sequence) if sequence else list(STEP_SEQUENCE)
         self.current_index = 0
 
     # --------------------------------------------------------
-    # CORE API (camera.py isko use karta hai)
+    # CORE API (used by camera.py)
     # --------------------------------------------------------
 
     def check_activity(self, activity):
         """
-        Detected activity ko sequence ke current step se compare karo.
+        Compare the detected activity with the current step of the sequence.
 
         Returns:
             {"status": "CORRECT" | "WRONG" | "COMPLETED" | "NEUTRAL",
              "message": str}
         """
-        # Saare steps complete ho chuke hain
+        # All steps have been completed
         if self.current_index >= len(self.sequence):
             return {
                 "status": "COMPLETED",
                 "message": "All steps completed. 🎉",
             }
 
-        # Pose unclear (legs visible nahi) — verdict dena galat hoga
+        # Pose unclear (legs not visible) — a verdict would be wrong
         if not activity or activity == "Unknown":
             return {
                 "status": "NEUTRAL",
-                "message": "Pose unclear — step verify nahi ho paya.",
+                "message": "Pose unclear — step could not be verified.",
             }
 
         expected = self.sequence[self.current_index]
@@ -76,7 +76,7 @@ class StepValidator:
         }
 
     def get_current_step(self):
-        """Abhi expected step ka naam, ya None agar sequence complete hai."""
+        """Name of the currently expected step, or None if the sequence is complete."""
         if self.current_index >= len(self.sequence):
             return None
         return self.sequence[self.current_index]
@@ -86,9 +86,9 @@ class StepValidator:
     # --------------------------------------------------------
 
     def reset(self):
-        """Sequence dobara shuru karne ke liye."""
+        """Restart the sequence from the beginning."""
         self.current_index = 0
 
     def get_progress(self):
-        """(completed_steps, total_steps) — UI progress ke liye."""
+        """(completed_steps, total_steps) — for UI progress."""
         return min(self.current_index, len(self.sequence)), len(self.sequence)

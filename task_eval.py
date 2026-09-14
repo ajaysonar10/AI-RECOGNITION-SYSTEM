@@ -3,26 +3,26 @@ task_eval.py
 ============
 BAS-AI • Live Task Evaluation Engine
 
-User task deta hai (natural language), LIVE CAMERA feed analyze hota hai,
-aur AI decide karta hai ki task COMPLETE hua ya nahi.
+The user gives a task (natural language), the LIVE CAMERA feed is
+analyzed, and the AI decides whether the task was COMPLETED or not.
 
-Kaise kaam karta hai:
+How it works:
   1) parse_task(task_text)
-     -> required ACTIVITIES (walking/sitting/standing) aur required
-        OBJECTS (bottle, chair, ...) nikaalta hai.
+     -> extracts the required ACTIVITIES (walking/sitting/standing) and
+        required OBJECTS (bottle, chair, ...).
 
   2) LiveTaskEvaluator
-     -> HAR FRAME par:
+     -> ON EVERY FRAME:
           - pose_detection.analyze_frame()   -> person activity + justification
           - object_detection.detect_objects() -> objects
-          - person-object PROXIMITY          -> pick/hold ka evidence
-     -> evidence FRAME BY FRAME accumulate hota hai
-     -> jab saare requirements CONFIRM ho jaate hain -> TASK COMPLETED
-     -> user "Check Task" dabata hai -> final verdict + report
+          - person-object PROXIMITY          -> pick/hold evidence
+     -> evidence accumulates FRAME BY FRAME
+     -> when all requirements are CONFIRMED -> TASK COMPLETED
+     -> the user presses "Check Task" -> final verdict + report
 
-Usage (camera.py / app.py se):
+Usage (from camera.py / app.py):
     ev = LiveTaskEvaluator(task_text)
-    ev.step(frame)           # har camera frame ke saath
+    ev.step(frame)           # with every camera frame
     ev.progress()            # 0-1 overall completion
     verdict = ev.evaluate()  # final verdict dict
 """
@@ -40,9 +40,9 @@ from object_detection import detect_objects
 # SETTINGS
 # ============================================================
 
-ACTIVITY_CONFIRM_CONFIDENCE = 60.0   # isse zyada conf = activity CONFIRMED
-PERSON_PROXIMITY_MARGIN = 0.6        # person bbox ke around extra "reach"
-                                     # area (person height ka fraction)
+ACTIVITY_CONFIRM_CONFIDENCE = 60.0   # confidence above this = activity CONFIRMED
+PERSON_PROXIMITY_MARGIN = 0.6        # extra "reach" area around the person bbox
+                                     # (fraction of person height)
 
 # Scoring
 SCORE_CONFIRMED = 100
@@ -103,7 +103,7 @@ INTERACTION_VERBS = [
 
 
 def _contains_phrase(text, phrase):
-    """Word-boundary match (taaki 'sit' word 'visit' me na mile)."""
+    """Word-boundary match (so the word 'sit' never matches inside 'visit')."""
     return re.search(
         r"\b" + re.escape(phrase) + r"\b",
         text
@@ -112,7 +112,7 @@ def _contains_phrase(text, phrase):
 
 def parse_task(task_text):
     """
-    Natural language task parse karke requirements nikaalta hai.
+    Parses a natural language task and extracts the requirements.
 
     Returns:
         {
@@ -132,8 +132,8 @@ def parse_task(task_text):
         for phrase in phrases:
             activity_phrases.append((phrase, activity))
 
-    # Longest phrases pehle — "move around" pehle match ho,
-    # "move" jaise chhote tokens baad me (already replaced text me nahi milenge)
+    # Longest phrases first — "move around" matches before
+    # small tokens like "move" (which no longer exist in the already-replaced text)
     activity_phrases.sort(key=lambda item: -len(item[0]))
 
     for phrase, activity in activity_phrases:
@@ -152,7 +152,7 @@ def parse_task(task_text):
         for word in words:
             object_phrases.append((word, coco_name))
 
-    # Longest words pehle — "cell phone" pehle, "phone" baad me
+    # Longest words first — "cell phone" before "phone"
     object_phrases.sort(key=lambda item: -len(item[0]))
 
     for word, coco_name in object_phrases:
@@ -191,8 +191,8 @@ def parse_task(task_text):
 
 def _object_near_person(person_bbox, object_box):
     """
-    Check karta hai ki object ka center, person ke "reach zone"
-    (bbox + margin) ke andar hai ya nahi.
+    Checks whether the object's center lies inside the person's
+    "reach zone" (bbox + margin) or not.
 
     Returns:
         (inside: bool, distance_px: float)
@@ -226,14 +226,14 @@ def _object_near_person(person_bbox, object_box):
 
 class LiveTaskEvaluator:
     """
-    Live camera feed ke saath task completion check karta hai.
+    Checks task completion against the live camera feed.
 
-    Har frame par step(frame) call karo. Evidence internally
-    accumulate hota hai. Jab sab requirements confirm ho jaate
-    hain to task automatically COMPLETED mark ho jaata hai.
+    Call step(frame) on every frame. Evidence accumulates
+    internally. When all requirements are confirmed, the task is
+    automatically marked COMPLETED.
 
-    evaluate() final verdict deta hai (user "Check Task" dabaye
-    tab, ya auto-complete hone par).
+    evaluate() gives the final verdict (when the user presses
+    "Check Task", or on auto-complete).
     """
 
     def __init__(self, task_text):
@@ -271,24 +271,24 @@ class LiveTaskEvaluator:
         self.voice_alert_pending = False
 
     # ------------------------------------------------
-    # MAIN: har frame ke saath call karo
+    # MAIN: call with every frame
     # ------------------------------------------------
 
     def step(self, frame):
         """
-        Ek camera frame process karta hai.
+        Processes one camera frame.
 
         Returns:
             (annotated_frame, live_status_text)
         """
 
         if self.finished:
-            # Task already decided — sirf last annotated frame wapas do
+            # Task already decided — return the last annotated frame only
             return self.last_annotated, self._status_line()
 
         annotated, persons = analyze_frame(frame)
 
-        # Objects fresh raw frame par (pose plot ke boxes me confusion na ho)
+        # Objects from the fresh raw frame (avoid confusion with pose-plot boxes)
         _, objects = detect_objects(frame)
 
         self.frames_processed += 1
@@ -323,7 +323,7 @@ class LiveTaskEvaluator:
 
             if required_activities:
 
-                # Agar detected activity required activity nahi hai
+                # If the detected activity is not the required activity
                 if current_activity not in required_activities:
 
                     if self.wrong_activity_start is None:
@@ -334,12 +334,12 @@ class LiveTaskEvaluator:
                         time.time() - self.wrong_activity_start
                     )
 
-                    # 10 seconds complete
+                    # 10 seconds elapsed
                     if wrong_duration >= 10:
                         self.voice_alert_pending = True
 
                 else:
-                    # Correct activity -> timer reset
+                    # Correct activity -> reset timer
                     self.wrong_activity_start = None
                     self.voice_alert_pending = False
 
@@ -360,7 +360,7 @@ class LiveTaskEvaluator:
             if conf > self.objects_seen.get(name, 0.0):
                 self.objects_seen[name] = conf
 
-        # Person ke paas kaun se objects hain
+        # Which objects are near the person
         for obj in objects:
 
             name = obj["class_name"]
@@ -389,13 +389,13 @@ class LiveTaskEvaluator:
                     self.interactions[name] = best
 
         # --------------------------------------------
-        # Auto-complete check (sab confirm?)
+        # Auto-complete check (everything confirmed?)
         # --------------------------------------------
 
         if self._all_confirmed():
             self.evaluate()
 
-        # Status line frame par bhi dikhao
+        # Show the status line on the frame too
         status = self._status_line()
 
         cv2.putText(
@@ -447,7 +447,7 @@ class LiveTaskEvaluator:
         return "missing"
 
     def _all_confirmed(self):
-        """Sab requirements confirm ho gayi?"""
+        """Have all requirements been confirmed?"""
 
         reqs = self.requirements
 
@@ -459,11 +459,11 @@ class LiveTaskEvaluator:
             if self._object_state(obj) != "interacted":
                 return False
 
-        # Kam se kam kuch frames to process hue
+        # At least a few frames must have been processed
         return self.frames_processed > 0
 
     def _part_scores(self):
-        """(activity_part, object_part) — None agar requirement nahi."""
+        """(activity_part, object_part) — None if there is no requirement."""
 
         states_act = [
             self._activity_state(a)
@@ -502,7 +502,7 @@ class LiveTaskEvaluator:
         return activity_part, object_part
 
     def _status_line(self):
-        """Chhoti live status string (frame overlay + metrics ke liye)."""
+        """Short live status string (for the frame overlay + metrics)."""
 
         reqs = self.requirements
 
@@ -530,7 +530,7 @@ class LiveTaskEvaluator:
     # ------------------------------------------------
 
     def progress(self):
-        """Overall completion 0.0 - 1.0 (UI progress bar ke liye)."""
+        """Overall completion 0.0 - 1.0 (for the UI progress bar)."""
 
         reqs = self.requirements
         total = len(reqs["activities"]) + len(reqs["objects"])
@@ -549,7 +549,7 @@ class LiveTaskEvaluator:
         return max(0.0, min(1.0, sum(parts) / len(parts) / 100.0))
 
     def stats_elapsed(self):
-        """Live session ka elapsed time (seconds)."""
+        """Elapsed time of the live session (seconds)."""
         return time.time() - self.start_time
 
     def get_voice_alert(self):
@@ -567,14 +567,14 @@ class LiveTaskEvaluator:
         else:
             message = "Wrong activity. Please perform the required task."
 
-        # Ek alert ke baad dobara immediately nahi
+        # Do not repeat the alert immediately after one alert
         self.voice_alert_pending = False
 
         return message
 
     def verdict_checklist(self):
         """
-        UI checklist ke liye current state of every requirement:
+        Current state of every requirement for the UI checklist:
             [{"activity": ..., "state": ...}, {"object": ..., "state": ...}]
         """
 
@@ -596,8 +596,8 @@ class LiveTaskEvaluator:
 
     def evaluate(self):
         """
-        Final verdict banata hai (idempotent — baar baar call karo,
-        same result milega jab tak naya evidence na aaye).
+        Builds the final verdict (idempotent — call it repeatedly,
+        the same result returns until new evidence arrives).
         """
 
         activity_part, object_part = self._part_scores()
@@ -610,8 +610,8 @@ class LiveTaskEvaluator:
             score = 50
             status = STATUS_REVIEW
             explanation = (
-                "Task me koi recognizable activity ya object nahi mila. "
-                "Task behtar likhein (jaise: 'walk across the room', "
+                "No recognizable activity or object was found for the task. "
+                "Write the task more clearly (e.g.: 'walk across the room', "
                 "'sit on the chair', 'pick up the bottle')."
             )
 
@@ -740,7 +740,7 @@ class LiveTaskEvaluator:
         return self.verdict
 
     def reset(self, task_text=None):
-        """Naya task shuru karo (ya wahi task dobara)."""
+        """Start a new task (or repeat the same task)."""
 
         if task_text is not None:
             self.task_text = (task_text or "").strip()
@@ -770,7 +770,7 @@ class LiveTaskEvaluator:
 # ============================================================
 
 def build_report(evaluator):
-    """LiveTaskEvaluator ke verdict se plain-text report banata hai."""
+    """Builds a plain-text report from the LiveTaskEvaluator verdict."""
 
     verdict = evaluator.verdict
     reqs = evaluator.requirements
@@ -841,13 +841,13 @@ def build_report(evaluator):
 
 
 # ============================================================
-# STANDALONE DEMO (bina UI ke)
+# STANDALONE DEMO (without UI)
 # ============================================================
 
 if __name__ == "__main__":
 
     print("BAS-AI Live Task Evaluation — DEMO")
-    print("Task likho, phir webcam ke saamne perform karo.")
+    print("Type a task, then perform it in front of the webcam.")
     print("'v' = check verdict | 'q' = quit\n")
 
     task_text = input("Enter the task: ")

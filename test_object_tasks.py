@@ -1,17 +1,17 @@
 """
-Object-Interaction Task Library ka simulation test (bina camera ke).
+Simulation test for the Object-Interaction Task Library (without a camera).
 
-Synthetic detections + synthetic persons bana kar verify karta hai:
+Builds synthetic detections + synthetic persons and verifies:
   1. Parser: supported / unsupported / unknown task text.
-  2. ObjectTracker: same object har frame -> ek stable track.
+  2. ObjectTracker: the same object every frame -> one stable track.
   3. Hold detection: wrist proximity -> is_held -> lift -> release.
-  4. Full pipeline: pick_bottle TaskVerificationSession ke through COMPLETE.
-  5. place_object_box: bottle bowl ke andar stable -> COMPLETE
-     (regression: khali bowl sirf khud ko "placed object" na bane).
+  4. Full pipeline: pick_bottle COMPLETE through TaskVerificationSession.
+  5. place_object_box: bottle stable inside a bowl -> COMPLETE
+     (regression: an empty bowl must not become its own "placed object").
   6. handoff_person: 2 persons, hold -> release -> transfer COMPLETE.
-  7. Unsupported task: honest reason, kabhi COMPLETE nahi.
-  8. Sequential multi-step: pick -> place, steps apni TURN par hi complete.
-  9. bottle_on_table: bottle bottom surface par + stable -> COMPLETE.
+  7. Unsupported task: honest reason, never COMPLETE.
+  8. Sequential multi-step: pick -> place, steps complete only in their TURN.
+  9. bottle_on_table: bottle bottom on the surface + stable -> COMPLETE.
 
 Run:  python test_object_tasks.py
 """
@@ -34,7 +34,7 @@ from task_detection import (
 
 
 # -----------------------------------------------------
-# Synthetic builders (test_task_verification.py jaisa pattern)
+# Synthetic builders (same pattern as test_task_verification.py)
 # -----------------------------------------------------
 
 def make_person(keypoints, person_conf=90.0, track_id=1):
@@ -50,8 +50,8 @@ def make_person(keypoints, person_conf=90.0, track_id=1):
 
 def standing_keypoints(right_wrist=None, left_wrist=(240, 300)):
     """
-    Khada person — torso ≈ 150px, isliye wrist reach = max(0.7*150,
-    0.5*box_diag). Default wrists hip-level par (door).
+    Standing person — torso ≈ 150px, so wrist reach = max(0.7*150,
+    0.5*box_diag). Default wrists at hip level (far away).
     """
     return {
         "nose": (320, 80),
@@ -65,7 +65,7 @@ def standing_keypoints(right_wrist=None, left_wrist=(240, 300)):
 
 
 def make_det(class_name, box, confidence=0.85):
-    """object_detection.detect_objects() jaisa detection dict."""
+    """A detection dict like object_detection.detect_objects()."""
     return {
         "class_id": 0,
         "class_name": class_name,
@@ -82,14 +82,14 @@ def make_context(tracker, persons, marked_location=None):
 
 
 def feed_object_frame(session, ctx, detections, persons):
-    """Ek frame: tracker update + session.process_persons (object path)."""
+    """One frame: tracker update + session.process_persons (object path)."""
     ctx.persons = persons
     ctx.tracker.update(detections, persons)
     return session.process_persons(persons, object_context=ctx)
 
 
 def move_box(box, dx, dy):
-    """Box ko shift karo (naya detection position)."""
+    """Shift the box (new detection position)."""
     return [box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy]
 
 
@@ -179,9 +179,9 @@ check("Held by person 1 (right)",
       bottle.held_by == {"side": "right", "person_id": 1},
       f"(got {bottle.held_by})")
 
-# bottle upar uthao — 20px/frame x 4 frames = 80px lift
-# (left wrist dur: warna uthi hui bottle left haath ke reach me
-#  aa jaati hai aur hold release kabhi nahi hota)
+# lift the bottle up — 20px/frame x 4 frames = 80px lift
+# (left wrist far: otherwise the lifted bottle comes within the left
+#  hand's reach and the hold never releases)
 y = bottle_box[1]
 for _ in range(4):
     y -= 20
@@ -196,9 +196,9 @@ for _ in range(4):
 check("Lift px >= 60 after moving up 80px",
       bottle.lift_px() >= 60, f"(got {bottle.lift_px():.0f})")
 
-# haath door — streak lift ke dauran 12 tak pahunch chuka hai,
-# decay 2/frame -> release < 3 par: 12->10->8->6->4->2 (5 frames)
-# (wrist (480,300): lifted-center (320,360) se ~171px > reach 105)
+# hand away — the streak already reached 12 during the lift,
+# decay 2/frame -> release below 3: 12->10->8->6->4->2 (5 frames)
+# (wrist (480,300): ~171px from lifted-center (320,360) > reach 105)
 for _ in range(5):
     tracker.update(
         [make_det("bottle", lifted_box)],
@@ -220,17 +220,17 @@ tracker = ObjectTracker()
 ctx = make_context(tracker, [])
 session = TaskVerificationSession(["Pick up the bottle"])
 
-bottle_box = [300, 400, 340, 480]   # diag ~89 -> lift > 31px chahiye
+bottle_box = [300, 400, 340, 480]   # diag ~89 -> needs lift > 31px
 cy = (bottle_box[1] + bottle_box[3]) / 2
 cx = (bottle_box[0] + bottle_box[2]) / 2
 
 r = None
-# 3 frames near (hold enter) + 14 frames upar uthate hue
+# 3 frames near (hold enter) + 14 frames lifting upward
 for i in range(17):
     if i < 3:
         box, wrist_y = bottle_box, cy
     else:
-        lift = (i - 2) * 12            # total 168px — diag se clearly zyada
+        lift = (i - 2) * 12            # total 168px — clearly above the diagonal
         box = [bottle_box[0], bottle_box[1] - lift,
                bottle_box[2], bottle_box[3] - lift]
         wrist_y = box[1] + 40
@@ -252,7 +252,7 @@ check("all_completed True (single task)",
 # -----------------------------------------------------
 print("\\n--- TEST 5: place_object_box (+ empty-bowl regression) ---")
 
-# --- 5a: khali bowl -> NOT detected (container self-match fix) ---
+# --- 5a: empty bowl -> NOT detected (container self-match fix) ---
 tracker = ObjectTracker()
 ctx = make_context(tracker, [])
 session = TaskVerificationSession(["Place object inside box"])
@@ -266,10 +266,10 @@ check("Empty bowl alone -> NOT detected",
       session.steps[0]["state"] != "COMPLETED",
       f"(state={session.steps[0]['state']}, reasons={r['reasons']})")
 
-# --- 5b: bottle ko bowl me rakho -> COMPLETE ---
-# bowl track ab bhi #1; bottle track #2 banega
-held_box = [200, 200, 240, 280]     # bowl se door, haath me
-target_box = [460, 340, 500, 420]   # bowl ke andar (center inside)
+# --- 5b: put the bottle into the bowl -> COMPLETE ---
+# the bowl track is still #1; the bottle becomes track #2
+held_box = [200, 200, 240, 280]     # away from the bowl, in hand
+target_box = [460, 340, 500, 420]   # inside the bowl (center inside)
 
 for i in range(31):
     if i < 3:
@@ -278,7 +278,7 @@ for i in range(31):
         kp = standing_keypoints(right_wrist=wrist)
         dets = [make_det("bowl", bowl_box), make_det("bottle", box)]
     elif i < 11:
-        # carried towards bowl (dhire-dhire, same track rehna chahiye)
+        # carried towards the bowl (slowly, must stay the same track)
         t = (i - 2) / 8.0
         x1 = 200 + (460 - 200) * t
         y1 = 200 + (340 - 200) * t
@@ -286,7 +286,7 @@ for i in range(31):
         kp = standing_keypoints(right_wrist=(x1 + 20, y1 + 40))
         dets = [make_det("bowl", bowl_box), make_det("bottle", box)]
     else:
-        # release: bowl ke andar stable, haath door
+        # release: stable inside the bowl, hand away
         box = target_box
         kp = standing_keypoints(right_wrist=(420, 250))
         dets = [make_det("bowl", bowl_box), make_det("bottle", box)]
@@ -318,14 +318,14 @@ p2 = make_person(
     standing_keypoints(right_wrist=(400, 300)), track_id=2
 )
 
-# 3 frames: p1 hold karta hai
+# 3 frames: p1 holds
 for _ in range(3):
     r = feed_object_frame(session, ctx, [make_det("cup", obj_box)],
                           [p1, p2])
 
 check("Object held by giver", ctx.tracker.tracks[0].is_held())
 
-# 2 frames: p1 haath hata leta hai (release), p2 abhi door
+# 2 frames: p1 pulls their hand away (release), p2 still far
 for _ in range(2):
     p1_away = make_person(standing_keypoints(), track_id=1)
     r = feed_object_frame(session, ctx, [make_det("cup", obj_box)],
@@ -344,7 +344,7 @@ check("handoff COMPLETED with 2 persons",
       session.steps[0]["state"] == "COMPLETED",
       f"(state={session.steps[0]['state']}, reasons={r['reasons']})")
 
-# --- 6b: sirf 1 person -> kabhi complete nahi ---
+# --- 6b: only 1 person -> never completes ---
 tracker = ObjectTracker()
 ctx = make_context(tracker, [])
 session = TaskVerificationSession(["Give object to another person"])
@@ -389,8 +389,8 @@ bowl_box = [400, 300, 600, 420]
 cx = (bottle_box[0] + bottle_box[2]) / 2
 cy = (bottle_box[1] + bottle_box[3]) / 2
 
-# Step 1 ke dauran: bottle PEHLE SE bowl me + free hai
-# (place-evidence) -> pick step complete NAHI hona chahiye
+# During Step 1: the bottle is ALREADY in the bowl + free
+# (place-evidence) -> the pick step must NOT complete
 for _ in range(16):
     kp = standing_keypoints(right_wrist=(420, 250))
     r = feed_object_frame(
@@ -406,8 +406,8 @@ check("Step 1 (pick) NOT completed by place-evidence",
       f"(index={session.current_index}, "
       f"state={session.steps[0]['state']})")
 
-# Ab sach me uthao: wrist par + lift (14px/frame — pick threshold
-# 0.35*diag~31px, detected ~i=5 se; window me 12+ detections)
+# Now actually lift: wrist on it + lift (14px/frame — pick threshold
+# 0.35*diag~31px, detected from ~i=5; 12+ detections in the window)
 for i in range(19):
     if i < 3:
         box, wrist_y = bottle_box, cy
@@ -430,21 +430,21 @@ check("Step 1 (pick) COMPLETED after hold+lift",
 check("Step 2 now IN PROGRESS",
       session.steps[1]["state"] == "IN PROGRESS")
 
-# Step 2: bottle ko bowl me le jao + release
+# Step 2: carry the bottle to the bowl + release
 bottle_track = [t for t in tracker.tracks
                 if t.class_name == "bottle"][0]
 cur = list(bottle_track.box)
 
 for i in range(29):
     if i < 9:
-        # carried towards bowl (haath saath)
+        # carried towards the bowl (hand with it)
         t = (i + 1) / 9.0
         x1 = cur[0] + (460 - cur[0]) * t
         y1 = cur[1] + (340 - cur[1]) * t
         box = [x1, y1, x1 + 40, y1 + 80]
         kp = standing_keypoints(right_wrist=(x1 + 20, y1 + 40))
     else:
-        # release — haath door, bowl me stable
+        # release — hand away, stable in the bowl
         # (streak 12 -> decay 5 frames -> release -> 12 detections)
         box = [460, 340, 500, 420]
         kp = standing_keypoints(right_wrist=(420, 250))
@@ -453,7 +453,7 @@ for i in range(29):
     r = feed_object_frame(session, ctx, dets,
                           [make_person(kp, track_id=1)])
     if r and r["all_completed"]:
-        break   # completion result (events ke saath) preserve karo
+        break   # preserve the completion result (with events)
 
 check("Step 2 (place) COMPLETED",
       session.steps[1]["state"] == "COMPLETED",
@@ -475,7 +475,7 @@ table_box = [100, 380, 700, 500]    # dining table
 bottle_box = [300, 250, 340, 380]   # bottom (380) table top (380) par
 
 for _ in range(16):
-    # haath bottle se door (free bottle, table par resting)
+    # hand away from the bottle (free bottle, resting on the table)
     kp = standing_keypoints(right_wrist=(450, 250),
                             left_wrist=(180, 500))
     r = feed_object_frame(
@@ -489,7 +489,7 @@ check("bottle_on_table COMPLETED",
       session.steps[0]["state"] == "COMPLETED",
       f"(state={session.steps[0]['state']}, reasons={r['reasons']})")
 
-# --- 9b: bottle table par NAHI hai -> NOT detected ---
+# --- 9b: bottle NOT on the table -> NOT detected ---
 tracker = ObjectTracker()
 ctx = make_context(tracker, [])
 session = TaskVerificationSession(["Put bottle on table"])
@@ -500,7 +500,7 @@ for _ in range(16):
     r = feed_object_frame(
         session, ctx,
         [make_det("dining table", table_box),
-         make_det("bottle", [300, 100, 340, 180])],   # upar hawa me
+         make_det("bottle", [300, 100, 340, 180])],   # up in mid-air
         [make_person(kp, track_id=1)]
     )
 
@@ -511,15 +511,15 @@ check("Bottle in mid-air -> NOT completed",
 # -----------------------------------------------------
 print("\\n--- TEST 10: Mid-air re-grip (wrist flicker) lift retention ---")
 
-# REAL-LIFE BUG regression: object uthaya, wrist keypoint flicker hua
-# (hold release), dobara grip kiya — lift measurement baseline se
-# toot-ti nahi (warna pick task kabhi complete nahi hota tha).
+# REAL-LIFE BUG regression: object lifted, wrist keypoint flickered
+# (hold released), gripped again — the lift measurement does not
+# break from the baseline (otherwise the pick task never completed).
 
 tracker = ObjectTracker()
 ctx = make_context(tracker, [])
 session = TaskVerificationSession(["Pick up an object"])
 
-obj_box = [300, 400, 360, 470]     # diag ~92 -> lift > 27px chahiye
+obj_box = [300, 400, 360, 470]     # diag ~92 -> needs lift > 27px
 cx = (obj_box[0] + obj_box[2]) / 2
 cy = (obj_box[1] + obj_box[3]) / 2
 
@@ -536,13 +536,13 @@ for i in range(26):
                obj_box[2], obj_box[3] - held_lift]
         wrist = (cx, box[1] + 35)
     elif phase == 2:
-        # frames 12-17: WRIST FLICKER — haath door (hold release
-        # hona chahiye, par lift baseline RETAIN)
+        # frames 12-17: WRIST FLICKER — hand away (the hold should
+        # release, but the lift baseline is RETAINED)
         box = [obj_box[0], obj_box[1] - held_lift,
                obj_box[2], obj_box[3] - held_lift]
         wrist = (480, 200)
     else:
-        # frames 18-25: re-grip hawa me (wahi lifted height)
+        # frames 18-25: re-grip mid-air (same lifted height)
         box = [obj_box[0], obj_box[1] - held_lift,
                obj_box[2], obj_box[3] - held_lift]
         wrist = (cx, box[1] + 35)
@@ -619,7 +619,7 @@ check("move_bottle_places COMPLETED (staged)",
       session.steps[0]["state"] == "COMPLETED",
       f"(state={session.steps[0]['state']}, reasons={r['reasons']})")
 
-# negative: bottle sirf middle me pahunchi — complete na ho
+# negative: the bottle only reached the middle — must not complete
 tracker = ObjectTracker()
 ctx = make_context(tracker, [])
 session = TaskVerificationSession(

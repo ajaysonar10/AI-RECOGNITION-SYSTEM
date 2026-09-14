@@ -4,18 +4,19 @@ object_tracking.py
 
 BAS-AI • Object Tracking for Task Verification
 
-YOLO detections (frame-by-frame) ko persistent TRACKS me convert karta hai
-taaki object MOVEMENT (uthana, rakhna, idhar-udhar lena) measure ho sake.
+Converts frame-by-frame YOLO detections into persistent TRACKS so that
+object MOVEMENT (picking up, putting down, carrying around) can be
+measured.
 
-Har track ke paas hota hai:
+Every track has:
   - box / center / confidence / class
   - history (recent centers)      -> displacement + stability
-  - hand proximity (left/right)   -> hold detection (wrist ke paas)
-  - hold state                    -> kab uthaya, kitna uthaya (lift),
-                                     kis person ne pakda
+  - hand proximity (left/right)   -> hold detection (near the wrist)
+  - hold state                    -> when it was picked up, how much
+                                     it was lifted, who grabbed it
 
-Ye module object_tasks.py (task logic) aur camera.py (live loop) dono
-use karte hain. Pure geometry — koi random/dummy value nahi.
+Both object_tasks.py (task logic) and camera.py (live loop) use this
+module. Pure geometry — no random/dummy values.
 """
 
 import math
@@ -29,33 +30,33 @@ import cv2
 # ============================================================
 
 TRACK_HISTORY_LEN = 30      # ~4-6 seconds of recent centers
-TRACK_MAX_MISSED = 12       # itne frames gayab -> track delete
-MATCH_MIN_IOU = 0.25        # IoU isse kam -> match nahi
+TRACK_MAX_MISSED = 12       # missing for this many frames -> track deleted
+MATCH_MIN_IOU = 0.25        # IoU below this -> no match
 MATCH_MAX_CENTER_RATIO = 0.8  # center dist < ratio * box diag -> match
 
-HOLD_ENTER_FRAMES = 6       # wrist itne frames paas rahe -> HOLD
-HOLD_RELEASE_FRAMES = 4     # wrist itni der door -> RELEASE
-NEAR_HAND_GAIN = 2          # paas frame par streak gain
-NEAR_HAND_DECAY = 2         # door frame par streak decay
+HOLD_ENTER_FRAMES = 6       # wrist near for this many frames -> HOLD
+HOLD_RELEASE_FRAMES = 4     # wrist away for this long -> RELEASE
+NEAR_HAND_GAIN = 2          # streak gain on a near frame
+NEAR_HAND_DECAY = 2         # streak decay on an away frame
 
-# Lift baseline kab reset ho (object wapas REST par). Release ke
-# baad bhi baseline RETAIN hota hai taaki wrist-flicker / re-grip
-# ke dauran lift measurement na toote (real-life pick bug).
+# When to reset the lift baseline (object back at REST). The baseline
+# is RETAINED even after release so the lift measurement does not
+# break during wrist-flicker / re-grip (real-life pick bug).
 REST_RESET_FRAMES = 8       # free + stable + no-hand frames -> rest
 
-# Release confirm: itne LAGATAR no-hand frames ke baad hi release
-# (wrist keypoint ek-do frame ke liye often gayab ho jaata hai jab
-# object haath me ho — false release roko).
+# Release confirm: release only after this many CONSECUTIVE no-hand
+# frames (the wrist keypoint often disappears for a frame or two when
+# the object is in hand — prevent false release).
 RELEASE_CONFIRM_FRAMES = 2
 
-# Held object haath ke saath tez chalta hai — iske liye match radius
-# relax karo (warna fast lift par track re-id hota hai aur lift
-# measurement kho jaata hai).
+# A held object moves fast with the hand — relax the match radius
+# (otherwise a fast lift re-ids the track and the lift
+# measurement is lost).
 HELD_MATCH_CENTER_RATIO = 1.6
 
 
 def _iou(box_a, box_b):
-    """Do boxes ke beech Intersection-over-Union."""
+    """Intersection-over-Union between two boxes."""
     ax1, ay1, ax2, ay2 = box_a
     bx1, by1, bx2, by2 = box_b
 
@@ -85,7 +86,7 @@ def _center(box):
 
 
 def _point_valid(point):
-    """Missing/zero keypoint safe check (pose pipeline jaisa rule)."""
+    """Missing/zero keypoint safe check (same rule as the pose pipeline)."""
     if point is None:
         return False
     try:
@@ -146,7 +147,7 @@ def _wrist(keypoints, side):
 
 
 def _elbow(keypoints, side):
-    """Elbow keypoint (hold SUSTAIN ke liye — grip me wrist occlude hota hai)."""
+    """Elbow keypoint (for hold SUSTAIN — the wrist occludes during a grip)."""
     idx = 7 if side == "left" else 8
 
     if isinstance(keypoints, dict):
@@ -168,7 +169,7 @@ def _elbow(keypoints, side):
 # ============================================================
 
 class ObjectTrack:
-    """Ek detected object ki persistent identity + movement history."""
+    """Persistent identity + movement history of one detected object."""
 
     def __init__(self, track_id, class_name, box, confidence):
         self.track_id = track_id
@@ -183,7 +184,7 @@ class ObjectTrack:
         self.seen = 1
         self.missed = 0
 
-        # recent confidences (avg_confidence ke liye)
+        # recent confidences (for avg_confidence)
         self.conf_history = deque(maxlen=12)
         self.conf_history.append(self.confidence)
 
@@ -194,18 +195,19 @@ class ObjectTrack:
         self.ever_held = False
         self.holder_history = deque(maxlen=10)   # person ids jo pakde
 
-        # container membership (object_tasks.evaluate_evidence update
-        # karta hai — kaunsa object kis container ke andar hai)
+        # container membership (updated by object_tasks.evaluate_evidence
+        # — which object is inside which container)
         self.members = set()
 
-        # hold shuru hote waqt ka center (displacement/lift isse)
+        # center at hold start (displacement/lift are measured from this)
         self.hold_start_center = None
         self.max_lift = 0.0
 
-        # LIFT BASELINE — rest position (ya hold-enter position).
-        # Release par CLEAR nahi hota; sirf REST_RESET_FRAMES ke
-        # baad reset hota hai (object wapas rest par aa chuka hai).
-        # Isse re-grip / wrist-flicker ke dauran lift measure hoti rehti hai.
+        # LIFT BASELINE — rest position (or hold-enter position).
+        # NOT cleared on release; reset only after REST_RESET_FRAMES
+        # (the object is back at rest).
+        # This keeps the lift measurement alive during re-grip /
+        # wrist-flicker.
         self.lift_baseline = None
         self._rest_frames = 0
         self._release_streak = 0
@@ -227,10 +229,10 @@ class ObjectTrack:
     @property
     def avg_confidence(self):
         """
-        Recent detections ki average confidence (last ~12 frames).
-        Weak-but-persistent detections (jaise webcam angle se table,
-        conf 0.07-0.11 flicker) ke liye robust — ek-frame noise
-        average ko utha nahi sakta.
+        Average confidence of recent detections (last ~12 frames).
+        Robust to weak-but-persistent detections (like a table seen
+        from a webcam angle, conf 0.07-0.11 flicker) — one-frame noise
+        cannot lift the average.
         """
         if not self.conf_history:
             return self.confidence
@@ -244,7 +246,7 @@ class ObjectTrack:
     # ------------------------------------------------
 
     def net_displacement(self, window=None):
-        """Purane aur naye center ke beech seedha distance (px)."""
+        """Straight-line distance (px) between the oldest and newest center."""
         pts = list(self.history)
         if window:
             pts = pts[-window:]
@@ -264,7 +266,7 @@ class ObjectTrack:
         return total
 
     def is_stable(self, frames=6, max_px=6.0):
-        """Recent frames me object lagbhag stationary hai?"""
+        """Has the object been roughly stationary in recent frames?"""
         pts = list(self.history)[-frames:]
         if len(pts) < frames:
             return False
@@ -276,18 +278,19 @@ class ObjectTrack:
         return (moved / (len(pts) - 1)) <= max_px
 
     def displacement_while_held(self):
-        """Hold shuru hone ke baad object kitna door gaya (px)."""
+        """How far the object has moved since the hold started (px)."""
         if self.hold_start_center is None:
             return 0.0
         return math.dist(self.hold_start_center, self.center)
 
     def lift_px(self):
         """
-        Hold ke dauran object kitna UPAR utha (px, positive = upar).
-        Baseline last REST position (ya hold-enter) se aata hai aur
-        release par clear NahI hota — re-grip / wrist-flicker par bhi
-        lift measurement valid rehti hai jab tak object rest par na
-        laut aaya ho (REST_RESET_FRAMES).
+        How far UP the object was lifted during the hold
+        (px, positive = up).
+        The baseline comes from the last REST position (or hold-enter)
+        and is NOT cleared on release — the lift measurement stays
+        valid across re-grip / wrist-flicker until the object returns
+        to rest (REST_RESET_FRAMES).
         """
         if self.lift_baseline is None:
             return 0.0
@@ -295,11 +298,10 @@ class ObjectTrack:
 
     def effective_lift_px(self):
         """
-        Pick tasks ke liye robust lift: current lift YA hold ke dauran
-        ki max lift — jo bhi badi ho. Release/re-grip flicker ke baad
-        bhi valid rehti hai jab tak object rest par na laut aaye
-        (REST_RESET_FRAMES ke baad baseline+max dono reset ho chuke
-        hote hain).
+        Robust lift for pick tasks: the current lift OR the max lift
+        achieved during the hold — whichever is larger. Remains valid
+        after release/re-grip flicker until the object returns to rest
+        (after REST_RESET_FRAMES both baseline and max have reset).
         """
         lift = self.lift_px()
 
@@ -310,11 +312,12 @@ class ObjectTrack:
 
     def carry_displacement(self):
         """
-        Carry/move tasks ke liye: baseline (last rest position ya
-        hold-enter) se ab tak ki seedhi doori. Baseline release par
-        retain hota hai — isliye carry ke dauran hold flicker hone
-        par bhi poori carry distance measure hoti hai (re-grip par
-        0 ho jaati thi — live test me "needed 168, moved 61" bug).
+        For carry/move tasks: the straight-line distance from the
+        baseline (last rest position or hold-enter) until now. The
+        baseline is retained across release — so even if the hold
+        flickers during a carry, the full carry distance is measured
+        (it used to reset to 0 on re-grip — the "needed 168, moved 61"
+        live-test bug).
         """
         if self.lift_baseline is None:
             return 0.0
@@ -325,7 +328,7 @@ class ObjectTrack:
     # ------------------------------------------------
 
     def inside_box(self, region_box, expand=0.0):
-        """Object center region box ke andar hai? (expand = fraction)"""
+        """Is the object center inside the region box? (expand = fraction)"""
         if region_box is None:
             return False
 
@@ -340,7 +343,7 @@ class ObjectTrack:
         return x1 <= cx <= x2 and y1 <= cy <= y2
 
     def was_inside_box(self, region_box, expand=0.0):
-        """Recent history me kabhi region ke andar tha?"""
+        """Was it ever inside the region in recent history?"""
         if region_box is None:
             return False
 
@@ -356,7 +359,7 @@ class ObjectTrack:
         return False
 
     def horizontal_overlap(self, region_box):
-        """Object box aur region box ka horizontal overlap fraction."""
+        """Horizontal overlap fraction between the object box and the region box."""
         if region_box is None:
             return 0.0
 
@@ -370,8 +373,8 @@ class ObjectTrack:
 
     def near_vertical(self, region_box, tolerance_frac=0.25):
         """
-        Object ka bottom, region ke top ke paas hai? (surface par
-        rakha hua maapne ke liye — table/bowl rim)
+        Is the object's bottom near the region's top? (to measure
+        something resting on a surface — table/bowl rim)
         """
         if region_box is None:
             return False
@@ -388,10 +391,10 @@ class ObjectTrack:
 
     def update_hand_proximity(self, persons):
         """
-        Har frame call hota hai (tracker.update ke andar).
-        Wrist-object proximity se hold state maintain karta hai.
-        Reach = max(0.7 * torso, 0.5 * box diagonal) — camera
-        distance se independent scale.
+        Called every frame (inside tracker.update).
+        Maintains the hold state from wrist-object proximity.
+        Reach = max(0.7 * torso, 0.5 * box diagonal) — a scale
+        independent of camera distance.
         """
         diag = _box_diag(self.box)
 
@@ -419,10 +422,11 @@ class ObjectTrack:
                                 dist, side, person.get("track_id"), reach
                             )
 
-                # ELBOW FALLBACK: object grip karne par wrist keypoint
-                # aksar occlude/drop ho jaata hai (live test me 12s tak
-                # gayab). Elbow object ke paas = hold SUSTAIN evidence.
-                # NOTE: hold INITIATE sirf wrist se hota hai.
+                # ELBOW FALLBACK: when gripping an object, the wrist
+                # keypoint is often occluded/dropped (missing for 12s
+                # in a live test). The elbow near the object = hold
+                # SUSTAIN evidence.
+                # NOTE: hold INITIATION happens only via the wrist.
                 elbow = _elbow(keypoints, side)
 
                 if elbow is not None:
@@ -457,10 +461,10 @@ class ObjectTrack:
         best_streak = max(self.near_streak.values())
 
         # --------------------------------------------
-        # REST BASELINE (lift measurement ka reference)
-        # Free + stable + koi haath paas nahi — object sach me rest
-        # par hai -> baseline reset. Re-grip/chhaunte ke chhote gaps
-        # me baseline bana rehta hai (lift measurement toot-ti nahi).
+        # REST BASELINE (reference for lift measurement)
+        # Free + stable + no hand near — the object is genuinely at
+        # rest -> reset the baseline. During small re-grip/spray gaps
+        # the baseline survives (the lift measurement does not break).
         # --------------------------------------------
 
         if self.held_by is None and best_near is None and best_elbow is None:
@@ -487,10 +491,11 @@ class ObjectTrack:
                 self.hold_frames = best_streak
                 self.hold_start_center = self.center
 
-                # Lift baseline: pehli baar (ya rest se uthate waqt)
-                # to abhi ka center; RE-GRIP hawa me ho to purana
-                # baseline RETAIN (warna lift dobara 0 ho jaati hai —
-                # wahi bug jisse pick kabhi complete nahi hota tha).
+                # Lift baseline: on the first grip (or when lifting off
+                # from rest) use the current center; on a mid-air
+                # RE-GRIP retain the old baseline (otherwise the lift
+                # resets to 0 — the bug that stopped pick from ever
+                # completing).
                 if self.lift_baseline is None:
                     self.lift_baseline = self.center
                     self.max_lift = 0.0
@@ -499,8 +504,8 @@ class ObjectTrack:
                     self.holder_history.append(person_id)
 
         elif self.held_by is not None:
-            # Sustain: wrist YA elbow paas ho (grip me wrist occlude hota
-            # hai — live-verified). Dono gayab -> release 2-frame confirm.
+            # Sustain: wrist OR elbow near (the wrist occludes during a
+            # grip — live-verified). Both gone -> 2-frame release confirm.
             sustained = best_near is not None or best_elbow is not None
 
             if sustained:
@@ -515,10 +520,10 @@ class ObjectTrack:
                     self._release_streak >= RELEASE_CONFIRM_FRAMES
                     and best_streak < HOLD_ENTER_FRAMES * 0.5
                 ):
-                    # RELEASE (hysteresis ke saath)
-                    # NOTE: lift_baseline jaan-boojh kar RETAIN —
-                    # wrist flicker ke baad re-grip par lift wahi
-                    # baseline se measure hogi.
+                    # RELEASE (with hysteresis)
+                    # NOTE: lift_baseline is deliberately RETAINED —
+                    # after a wrist flicker, a re-grip measures the lift
+                    # from the same baseline.
                     self.held_by = None
                     self.hold_start_center = None
                     self._release_streak = 0
@@ -535,7 +540,7 @@ class ObjectTracker:
     """
     Frame-by-frame YOLO detections -> persistent tracks.
 
-    Usage (camera loop me har frame par):
+    Usage (in the camera loop, every frame):
         tracker.update(detections, persons)
         tracks = tracker.tracks
     """
@@ -553,7 +558,7 @@ class ObjectTracker:
     # ------------------------------------------------
 
     def _best_match(self, det):
-        """Same class ke sabse achhe track se match karo (IoU ya center)."""
+        """Match the best track of the same class (IoU or center)."""
         det_box = det["box"]
         det_center = _center(det_box)
         det_diag = _box_diag(det_box)
@@ -569,9 +574,9 @@ class ObjectTracker:
             iou = _iou(track.box, det_box)
             center_dist = math.dist(track.center, det_center)
 
-            # Held / grip-hone-wala object haath ke saath tez chalta
-            # hai — iska match radius relax (fast lift par track
-            # re-id na ho; warna lift measurement kho jaati hai).
+            # A held / about-to-be-gripped object moves fast with the
+            # hand — relax its match radius (so the track does not re-id
+            # on a fast lift; otherwise the lift measurement is lost).
             ratio = MATCH_MAX_CENTER_RATIO
             if track.is_held() or max(track.near_streak.values()) >= 3:
                 ratio = HELD_MATCH_CENTER_RATIO
@@ -585,8 +590,8 @@ class ObjectTracker:
                 or (iou > 0 and center_ok)
                 or (track.is_held() and center_ok)
             ):
-                # Held object haath me tez chalta hai — overlap kabhi
-                # kabhi zero ho jaata hai; center-distance match kaafi hai.
+                # A held object moves fast in the hand — overlap can
+                # sometimes be zero; center-distance matching suffices.
                 score = iou + (0.2 if center_ok else 0.0)
 
                 if score > best_score:
@@ -601,18 +606,18 @@ class ObjectTracker:
 
     def update(self, detections, persons=None):
         """
-        detections: object_detection.detect_objects() ki list
-                    (person class filter ho jaata hai)
-        persons:    pose_detection.analyze_frame() ki persons list
+        detections: list from object_detection.detect_objects()
+                    (person class is filtered out)
+        persons:    persons list from pose_detection.analyze_frame()
 
-        Returns: active tracks list
+        Returns: list of active tracks
         """
         matched_tracks = set()
 
         for det in detections or []:
 
-            # Person ko object tracker me nahi rakhte
-            # (wo pose pipeline track karta hai)
+            # Do not keep persons in the object tracker
+            # (the pose pipeline tracks them)
             if det.get("class_name") == "person":
                 continue
 
@@ -637,12 +642,12 @@ class ObjectTracker:
             if track.track_id not in matched_tracks:
                 track.mark_missed()
 
-        # hand proximity + hold state (sirf visible tracks)
+        # hand proximity + hold state (visible tracks only)
         for track in self.tracks:
             if track.missed == 0:
                 track.update_hand_proximity(persons)
 
-        # purane gayab tracks hatao
+        # drop old missing tracks
         self.tracks = [
             t for t in self.tracks if t.missed <= TRACK_MAX_MISSED
         ]
@@ -654,7 +659,7 @@ class ObjectTracker:
     # ------------------------------------------------
 
     def of_class(self, class_names, min_conf=0.35):
-        """Specific classes ke visible tracks (confidence sorted)."""
+        """Visible tracks of the given classes (sorted by confidence)."""
         if isinstance(class_names, str):
             class_names = [class_names]
 
@@ -668,7 +673,7 @@ class ObjectTracker:
         return sorted(found, key=lambda t: -t.confidence)
 
     def any_object(self, min_conf=0.40, min_diag=40.0):
-        """Koi bhi non-person object track (pick up an object ke liye)."""
+        """Any non-person object track (for "pick up an object")."""
         found = [
             t for t in self.tracks
             if t.missed == 0
@@ -684,7 +689,7 @@ class ObjectTracker:
 
 
 # ============================================================
-# DRAW HELPERS (camera.py ke liye)
+# DRAW HELPERS (for camera.py)
 # ============================================================
 
 TRACK_COLORS = {
@@ -695,8 +700,8 @@ TRACK_COLORS = {
 
 def draw_tracks(frame, tracks, region_box=None):
     """
-    Tracks + optional target region(s) frame par draw karta hai.
-    region_box: ek box [x1,y1,x2,y2] YA boxes ki list
+    Draws the tracks + optional target region(s) on the frame.
+    region_box: one box [x1,y1,x2,y2] OR a list of boxes
     (2 boxes = PLACE 1 / PLACE 2 labels, move_bottle_places demo).
     """
 

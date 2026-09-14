@@ -25,7 +25,7 @@ from object_detection import detect_objects
 #functions
 def _parse_any(text):
     """
-    Text ko pose-action YA object-task library se parse karo.
+    Parse the text with the pose-action OR object-task library.
 
     Returns (kind, key, label, detail):
         kind: "pose" | "object" | "unsupported" | None
@@ -61,7 +61,7 @@ def _parse_any(text):
 def _texts_need_objects(texts):
     """
     Kya koi text object-interaction task hai?
-    (Object options UI + per-frame object detection sirf tab chalta hai.)
+    (The object options UI + per-frame object detection run only then.)
     """
     for text in texts:
 
@@ -85,9 +85,9 @@ def _texts_need_objects(texts):
 
 def _prepare_object_context(texts):
     """
-    Object-interaction tasks ke liye fresh ObjectTaskContext + tracker
-    banao (Start/Reset par). Pose-only runs me context None rehta hai —
-    tab live loop me extra YOLO-object inference skip hota hai (same
+    Build a fresh ObjectTaskContext + tracker for object-interaction
+    tasks (on Start/Reset). In pose-only runs the context stays None —
+    the live loop then skips the extra YOLO-object inference (same
     performance as before).
     """
     if not _texts_need_objects(texts):
@@ -97,7 +97,7 @@ def _prepare_object_context(texts):
     tracker = ObjectTracker()
     context = ObjectTaskContext(tracker)
 
-    # Config-screen options (widgets apne keys me store karte hain)
+    # Config-screen options (widgets store their own keys)
     chosen_color = st.session_state.get("tv_opt_color")
     context.chosen_color = (
         None if chosen_color in (None, "(none)") else chosen_color
@@ -129,22 +129,22 @@ def speak_alert(message):
 
     threading.Thread(target=_speak, daemon=True).start()
 # ------------------------------------------------------------
-# Object boxes ko pose frame par draw karne ka helper
-# (alag color, taaki pose/person boxes se confuse na ho)
+# Helper to draw object boxes on the pose frame
+# (a separate color, so they are not confused with pose/person boxes)
 # ------------------------------------------------------------
 
 OBJECT_BOX_COLOR = (0, 200, 255)   # BGR: orange
 
-# Task verification: ek rerun me kitne frames process honge.
-# ~5 frames ≈ 1 second — Stop/Reset/New Task clicks iske andar
-# effective hote hain, aur camera session_state me rehta hai
-# isliye har batch par device dobara open nahi hota.
+# Task verification: how many frames are processed per rerun.
+# ~5 frames ≈ 1 second — Stop/Reset/New Task clicks take effect
+# within this window, and the camera stays in session_state
+# so the device is not reopened on every batch.
 TV_BATCH_FRAMES = 5
 
 
 def draw_object_boxes(frame, objects):
     """
-    Detected objects ke boxes + labels frame par draw karta hai.
+    Draws the detected objects' boxes + labels on the frame.
     """
 
     for obj in objects:
@@ -282,7 +282,7 @@ def show_camera():
     objects_metric.metric("Objects", "0")
     progress_placeholder.progress(0)
     detection_placeholder.info("🤖 AI camera detection running...")
-    objects_placeholder.info("📦 Object detection active — boxes frame par dikhenge.")
+    objects_placeholder.info("📦 Object detection active — boxes will be shown on the frame.")
 
     if camera_type == "Laptop Camera":
 
@@ -547,8 +547,8 @@ def show_camera():
         else:
 
             analysis_placeholder.info(
-                "Person position aur justification yahan dikhega "
-                "jab koi person frame mein aayega."
+                "Person position and justification will appear here "
+                "when a person enters the frame."
             )
 
         # ----------------------------------------------
@@ -575,7 +575,7 @@ def show_camera():
         else:
 
             objects_placeholder.info(
-                "📦 Koi object detect nahi hua is frame mein."
+                "📦 No object was detected in this frame.",
             )
 
         # ----------------------------------------------
@@ -668,7 +668,7 @@ def show_camera():
 
 # ============================================================
 # LIVE TASK EVALUATION
-# (User task deta hai -> live camera se AI verify karta hai)
+# (The user gives a task -> the AI verifies it from the live camera)
 # ============================================================
 
 from task_eval import LiveTaskEvaluator, build_report
@@ -679,12 +679,12 @@ def show_task_evaluation():
     st.subheader("📝 Task")
 
     task = st.text_area(
-        "What should the person do? (live camera par perform karo)",
+        "What should the person do? (perform it on the live camera)",
         placeholder="Example: Pick up the bottle and place it on the table",
         key="task_eval_input"
     )
 
-    # Live parse preview — user ko dikhta hai AI ne kya samjha
+    # Live parse preview — the user sees what the AI understood
     if task.strip():
 
         from task_eval import parse_task
@@ -825,7 +825,7 @@ def show_task_evaluation():
         evaluator = st.session_state.task_evaluator
 
         # ------------------------------------------
-        # Camera open karo
+        # Open the camera
         # ------------------------------------------
 
         if camera_type == "Laptop Camera":
@@ -878,7 +878,7 @@ def show_task_evaluation():
         justify_placeholder = st.empty()
 
         auto_note = st.info(
-            "🤖 Live evaluation running... Task poora karo. "
+            "🤖 Live evaluation running... Complete the task. "
             "Jaise hi saari requirements confirm ho jayengi, "
             "verdict AUTO dikh jayega. Ya 'Stop & Get Verdict' dabao."
         )
@@ -986,7 +986,7 @@ def show_task_evaluation():
         cap.release()
 
         # ------------------------------------------
-        # Loop khatam -> verdict dikhao
+        # Loop finished -> show the verdict
         # ------------------------------------------
 
         st.session_state.task_eval_running = False
@@ -1005,7 +1005,7 @@ def show_task_evaluation():
 
 
 def _checklist_markdown(evaluator):
-    """Live checklist markdown banata hai."""
+    """Builds the live checklist markdown."""
 
     lines = []
 
@@ -1033,7 +1033,7 @@ def _checklist_markdown(evaluator):
 
 
 def _show_verdict(verdict, evaluator):
-    """Final verdict + report render karta hai."""
+    """Renders the final verdict + report."""
 
     st.divider()
 
@@ -1133,12 +1133,12 @@ def _show_verdict(verdict, evaluator):
 # ============================================================
 # ✅ TASK VERIFICATION / TASK COMPLETION SYSTEM
 # (Single task ya multi-step task — REAL camera + YOLO Pose
-#  keypoints se verify hota hai, koi dummy values nahi)
+#  keypoints — no dummy values)
 # ============================================================
 
 
 def _task_camera(cap_type):
-    """Existing camera sources open karta hai (laptop ya mobile)."""
+    """Opens the existing camera sources (laptop or mobile)."""
 
     if cap_type == "Laptop Camera":
         if sys.platform == "win32":
@@ -1163,7 +1163,7 @@ def _task_camera(cap_type):
 
 
 def _render_task_status(task_session, result, object_context=None):
-    """Camera ke beside task status + multi-step progress dikhata hai."""
+    """Shows the task status + multi-step progress beside the camera."""
 
     # ----------------------------------------------
     # CURRENT TASK
@@ -1178,14 +1178,14 @@ def _render_task_status(task_session, result, object_context=None):
         )
 
     # ----------------------------------------------
-    # STATUS (real-time streak ke saath)
+    # STATUS (with the real-time streak)
     # ----------------------------------------------
 
     if result["all_completed"]:
         st.success("✓ TASK COMPLETED")
 
     elif result["step_completed"]:
-        # Is frame par step complete hua (green flash)
+        # The step completed on this frame (green flash)
         st.success(
             f"✓ Step {result['completed_step_number']} COMPLETED"
         )
@@ -1324,15 +1324,15 @@ def _render_task_status(task_session, result, object_context=None):
 
 
 def show_task_verification():
-    """Task Verification page — existing camera + pose pipeline use karta hai."""
+    """Task Verification page — uses the existing camera + pose pipeline."""
 
     st.subheader("✅ Task Verification")
 
-    # Task history (app.py bhi init karta hai — double safety)
+    # Task history (app.py also initializes it — double safety)
     if "task_history" not in st.session_state:
         st.session_state.task_history = []
 
-    # Pichhle batch me camera frames band ho gaye the?
+    # Did the camera frames stop in the previous batch?
     if st.session_state.pop("tv_camera_lost", False):
         st.error(
             "❌ Camera stopped sending frames — verification "
@@ -1363,8 +1363,8 @@ def show_task_verification():
 
         st.session_state.tv_single_text = task_text
 
-        # FIX: single-task text ko task_texts me add karna zaroori tha,
-        # warna Start button hamesha disabled rehta hai.
+        # FIX: adding the single-task text to task_texts was necessary,
+        # otherwise the Start button stayed disabled forever.
         if task_text.strip():
             task_texts.append(task_text)
 
@@ -1431,7 +1431,7 @@ def show_task_verification():
 
     # ----------------------------------------------
     # OBJECT TASK OPTIONS (Task Library extras —
-    # sirf tab dikhte hain jab object-interaction task ho)
+    # shown only when the task is an object-interaction task)
     # ----------------------------------------------
 
     if _texts_need_objects(task_texts):
@@ -1546,8 +1546,8 @@ def show_task_verification():
     # ----------------------------------------------
 
     # CAMERA LIFECYCLE — task lifecycle se BILKUL independent.
-    # Camera ek baar ON hoga, phir sirf STOP CAMERA button se
-    # band hoga (task complete/fail/reset par NAHI).
+    # The camera turns ON once, then stops only via the STOP CAMERA button
+    # (never on task complete/fail/reset).
     if "tv_cam_on" not in st.session_state:
         st.session_state.tv_cam_on = False
 
@@ -1580,15 +1580,15 @@ def show_task_verification():
         st.rerun()
 
     if stop_cam_pressed:
-        # SIRF yahan camera band hota hai
+        # The camera stops ONLY here
         st.session_state.tv_cam_on = False
         release_task_camera()
         st.session_state.tv_running = False
         st.session_state.task_session = None
         st.rerun()
 
-    # Legacy buttons ab camera ko touch nahi karte —
-    # sirf TASK state reset karte hain
+    # The legacy buttons no longer touch the camera —
+    # they only reset the TASK state
     btn_col1, btn_col2, btn_col3 = st.columns(3)
 
     with btn_col1:
@@ -1612,8 +1612,8 @@ def show_task_verification():
         )
 
     # ----------------------------------------------
-    # TASK START — camera chal raha ho ya na, task set ho jaata hai
-    # (agar camera off hai to bhi task enter kar sakte hain)
+    # TASK START — whether the camera is running or not, the task gets set
+    # (a task can be entered even while the camera is off)
     # ----------------------------------------------
 
     if start_pressed:
@@ -1630,7 +1630,7 @@ def show_task_verification():
             st.rerun()
 
     if clear_pressed:
-        # Task clear — CAMERA KO CHHEDA NAHI JAATA
+        # Task clear — THE CAMERA IS NOT TOUCHED
         st.session_state.task_session = None
         st.session_state.tv_running = False
         st.rerun()
@@ -1650,7 +1650,7 @@ def show_task_verification():
         st.rerun()
 
     # ----------------------------------------------
-    # SESSION INIT (agar abhi tak kabhi start nahi hua)
+    # SESSION INIT (if never started so far)
     # ----------------------------------------------
 
     if "task_session" not in st.session_state:
@@ -1662,9 +1662,9 @@ def show_task_verification():
     task_session = st.session_state.get("task_session")
 
     # ----------------------------------------------
-    # CAMERA STATE vs TASK STATE — BILKUL ALAG.
-    # tv_cam_on sirf STOP CAMERA se band hota hai.
-    # task_session ka complete/fail/clear camera ko NAHI chhoota.
+    # CAMERA STATE vs TASK STATE — COMPLETELY SEPARATE.
+    # tv_cam_on stops only via STOP CAMERA.
+    # task_session complete/fail/clear never touches the camera.
     # ----------------------------------------------
 
     if not st.session_state.tv_cam_on:
@@ -1703,8 +1703,9 @@ def show_task_verification():
     status_placeholder.success("Camera: 🟢 RUNNING")
 
     # ----------------------------------------------
-    # TASK COMPLETED — banner dikhao (~2.5s), phir task khud-ba-khud
-    # clear: operator agla task de sakta hai, CAMERA CHALTA REHTA HAI.
+    # TASK COMPLETED — show the banner (~2.5s), then the task clears
+    # automatically: the operator can give the next task, THE CAMERA
+    # KEEPS RUNNING.
     # ----------------------------------------------
 
     if task_session is not None and task_session.all_completed:
@@ -1752,7 +1753,7 @@ def show_task_verification():
             time.sleep(1.0)   # banner readable, phir auto-reset
             st.rerun()
 
-        # 2.5s ho gaye -> task reset (history me already logged hai)
+        # 2.5s passed -> task reset (already logged in history)
         st.session_state.task_session = None
         st.session_state.tv_running = False
         st.session_state.tv_completed_at = None
@@ -1763,8 +1764,8 @@ def show_task_verification():
     st.session_state.tv_completed_at = None
 
     # ----------------------------------------------
-    # CAMERA — session_state me rehta hai taaki Stop/Resume
-    # batches ke beech device dobara open na karna pade.
+    # CAMERA — stays in session_state so the device does not have to
+    # be reopened between Stop/Resume batches.
     # ----------------------------------------------
 
     cap = st.session_state.get("tv_cap")
@@ -1779,12 +1780,12 @@ def show_task_verification():
 
         st.session_state.tv_cap = cap
 
-        # Person tracker ko fresh start do (naye run ki purani
-        # movement history naye analysis ko affect na kare)
+        # Give the person tracker a fresh start (so the old run's
+        # movement history does not affect the new analysis)
         reset_tracker()
 
-        # Object tracker/context bhi fresh (naye run ki purani
-        # track history displacement measurement kharab na kare)
+        # Object tracker/context fresh too (so the old run's track
+        # history does not corrupt displacement measurement)
         obj_ctx = st.session_state.get("tv_object_context")
 
         if obj_ctx is not None:
@@ -1792,9 +1793,9 @@ def show_task_verification():
             st.session_state.tv_tracks = []
 
     # ----------------------------------------------
-    # MONITOR-ONLY MODE (koi task active nahi): camera phir bhi
-    # pose + activity + live objects dikhata hai — bas task
-    # verification nahi chalti.
+    # MONITOR-ONLY MODE (no task active): the camera still shows
+    # pose + activity + live objects — just no task
+    # verification runs.
     # ----------------------------------------------
 
     if task_session is None and st.session_state.get(
@@ -1831,19 +1832,19 @@ def _task_verification_batch(
     object_context=None,
 ):
     """
-    ~1 second ka frame batch process karke rerun karta hai.
+    Processes a ~1 second frame batch, then reruns.
 
-    Batch design ka reason: ek lamba Python loop Streamlit script ko
-    block kar deta hai — tab Stop/Reset/New Task ke clicks queue me
-    pending rehte hain aur kabhi execute nahi hote. Chhote batches ke
-    saath har click 1-2 second me effective hota hai. Camera
-    session_state me rehta hai isliye har batch par device dobara
-    open nahi hota (koi flicker nahi).
+    Reason for the batch design: one long Python loop blocks the
+    Streamlit script — Stop/Reset/New Task clicks then sit pending
+    in the queue and never execute. With small batches every click
+    takes effect within 1-2 seconds. The camera stays in
+    session_state, so the device is not reopened every batch
+    (no flicker).
     """
 
     # ----------------------------------------------
     # LIVE BATCH — camera frame → YOLO Pose → (task logic)
-    # Camera har frame ME CHALTA HAI — task ho ya na ho.
+    # The camera runs ON EVERY FRAME — with or without a task.
     # ----------------------------------------------
 
     for _ in range(TV_BATCH_FRAMES):
@@ -1868,7 +1869,7 @@ def _task_verification_batch(
 
         # ------------------------------------------------
         # OBJECT TASKS: YOLO objects -> tracker -> context
-        # (extra YOLO-object inference sirf object-interaction
+        # (extra YOLO-object inference only in object-interaction
         # runs me hota hai — pose-only runs unchanged performance)
         # ------------------------------------------------
 
@@ -1880,11 +1881,11 @@ def _task_verification_batch(
                 current_action = current_step.get("action")
 
         if object_context is not None:
-            # conf 0.10: weak-but-real detections (dining table webcam
-            # angle par 0.07-0.11) tracker tak pahunchein — task-level
-            # gates (MIN_OBJECT_CONF/MIN_TABLE_CONF + avg_confidence)
-            # aage filter karti hain. Detector-level 0.30 table ko
-            # pipeline se hi hata deta tha.
+            # conf 0.10: weak-but-real detections (a dining table at
+            # a webcam angle scores 0.07-0.11) must reach the tracker —
+            # task-level gates (MIN_OBJECT_CONF/MIN_TABLE_CONF +
+            # avg_confidence) filter further downstream. A detector-level
+            # 0.30 removed the table from the pipeline entirely.
             _, objects = detect_objects(frame, conf=0.10)
 
             object_context.persons = persons
@@ -1908,7 +1909,7 @@ def _task_verification_batch(
                 ]
 
             # Move Bottle (Place 1 -> Place 2) demo: left/right
-            # third overlays dikhao (stage guidance ke liye)
+            # third overlays (for stage guidance)
             if current_action == "move_bottle_places":
                 fw = float(annotated.shape[1])
                 fh = float(annotated.shape[0])
@@ -1920,7 +1921,7 @@ def _task_verification_batch(
             draw_tracks(annotated, tracks, region_box=region)
 
         # ------------------------------------------------
-        # TASK LOGIC — sirf jab task active ho. No task = general
+        # TASK LOGIC — only while a task is active. No task = general
         # monitoring (pose + activity + objects), no verification.
         # ------------------------------------------------
 
@@ -2025,8 +2026,8 @@ def _task_verification_batch(
                     "for temporal confirmation!"
                 )
             else:
-                # REAL reason dikhao ("No object detected..." etc.) —
-                # generic message ki jagah (detection debugging)
+                # Show the REAL reason ("No object detected..." etc.) —
+                # instead of a generic message (detection debugging)
                 reason = (
                     result["reasons"][0] if result["reasons"]
                     else "perform the current step."
@@ -2077,12 +2078,12 @@ def _task_verification_batch(
         # ALL COMPLETED
         # ------------------------------------------------
 
-        # NOTE: completion par camera BAND NAHI hota — task clear
-        # upar show_task_verification me hota hai, batch chalta rehta hai.
+        # NOTE: the camera does NOT stop on completion — the task clear
+        # happens in show_task_verification above; the batch keeps running.
 
     # ----------------------------------------------
-    # BATCH KHATAM -> fresh render (agla batch). Camera ke liye
-    # sirf STOP CAMERA button (upar) responsible hai.
+    # BATCH DONE -> fresh render (next batch). Only the STOP CAMERA
+    # button (above) is responsible for the camera.
     # ----------------------------------------------
 
     st.rerun()

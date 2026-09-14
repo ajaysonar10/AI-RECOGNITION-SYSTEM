@@ -4,17 +4,18 @@ task_detection.py
 
 BAS-AI • Task Verification / Task Completion System
 
-Ye module REAL YOLO-Pose keypoints se user tasks verify karta hai.
-Koi dummy/random/static values nahi — ek task tabhi COMPLETE hota hai jab:
+This module verifies user tasks from REAL YOLO-Pose keypoints.
+No dummy/random/static values — a task becomes COMPLETE only when:
 
-  1. pose_detection.analyze_frame() se mile keypoints par task ka
-     pose GEOMETRY match ho (shoulder/elbow/wrist/hip/knee/ankle angles),
-  2. wo match TASK_CONFIRM_FRAMES consecutive (near-consecutive) frames
-     tak bana rahe (temporal confirmation — false positives rokne ke liye),
-  3. aur multi-step tasks me steps apni TURN par hi complete hon
+  1. the task pose GEOMETRY matches the keypoints from
+     pose_detection.analyze_frame() (shoulder/elbow/wrist/hip/knee/
+     ankle angles),
+  2. that match persists for TASK_CONFIRM_FRAMES (near-)consecutive
+     frames (temporal confirmation — to block false positives),
+  3. and in multi-step tasks the steps complete only in their TURN
      (sequential enforcement).
 
-Pipeline (existing architecture ke andar):
+Pipeline (inside the existing architecture):
 
     camera frame
       ↓
@@ -36,18 +37,18 @@ Public API:
 
 OBJECT TASKS (modular extension):
     Object-interaction tasks (pick up bottle, place in box, handoff,
-    ...) object_tasks.py ke HANDLERS me hain. TaskVerificationSession
-    unhe transparently dispatch karta hai — parse_task_text pehle
-    pose actions try karta hai, phir object task library. Temporal
-    confirmation + sequential lock object tasks par bhi LAGU hota hai
-    (same sliding window, same LOCKED/IN PROGRESS/COMPLETED states).
-    camera.py ObjectTaskContext (tracker + objects + options) banata
-    hai aur process_persons(persons, object_context=...) pass karta hai.
+    ...) live in the HANDLERS of object_tasks.py. TaskVerificationSession
+    dispatches them transparently — parse_task_text first tries pose
+    actions, then the object task library. Temporal confirmation +
+    sequential lock APPLY to object tasks too (same sliding window,
+    same LOCKED/IN PROGRESS/COMPLETED states).
+    camera.py builds the ObjectTaskContext (tracker + objects + options)
+    and passes process_persons(persons, object_context=...).
 
-NOTE: Ye module jaan-boojh kar sirf math/re/datetime use karta hai —
-koi cv2/ultralytics import nahi, taaki ye bina camera/model ke bhi
-test ho sake. (object_tasks import bhi lazy hai — pose-only use me
-object module load hi nahi hota.)
+NOTE: This module deliberately uses only math/re/datetime —
+no cv2/ultralytics imports, so it can be tested without a
+camera/model. (The object_tasks import is also lazy — in pose-only
+usage the object module never loads.)
 """
 
 import math
@@ -60,30 +61,30 @@ from datetime import datetime
 # SETTINGS
 # ============================================================
 
-# Temporal confirmation: required pose itne (near-)consecutive valid
-# frames tak match ho tabhi step COMPLETED ho. (Spec: 8-15 frames)
+# Temporal confirmation: the required pose must match for this many
+# (near-)consecutive valid frames before a step is COMPLETED. (Spec: 8-15 frames)
 TASK_CONFIRM_FRAMES = 12
 
-# Sliding-window temporal confirmation: required pose ko last
-# (TASK_CONFIRM_FRAMES + WINDOW_EXTRA_FRAMES) frames me kam se kam
-# TASK_CONFIRM_FRAMES dafa detect hona chahiye. YOLO keypoints
-# threshold ke paas ek-do frame flicker karte hain — window unhe
-# forgive karti hai, par pose sach me na ho to completion kabhi
-# nahi hoti (false-positive safe).
+# Sliding-window temporal confirmation: the required pose must be
+# detected at least TASK_CONFIRM_FRAMES times within the last
+# (TASK_CONFIRM_FRAMES + WINDOW_EXTRA_FRAMES) frames. YOLO keypoints
+# flicker for a frame or two near the threshold — the window forgives
+# them, but if the pose is genuinely absent completion never happens
+# (false-positive safe).
 WINDOW_EXTRA_FRAMES = 6
 
-# Stand: avg knee angle iske upar + hip<knee<ankle vertical order
+# Stand: avg knee angle above this + hip<knee<ankle vertical order
 STAND_KNEE_ANGLE = 150.0
-# Sit: avg knee angle iske neeche + hip knee-level ke paas
+# Sit: avg knee angle below this + hip near knee-level
 SIT_KNEE_ANGLE = 125.0
 SIT_HIP_KNEE_RATIO = 0.6   # |hip.y - knee.y| < 0.6 * thigh length => seated
 
-# Raise hand: wrist shoulder se itna (torso length ka fraction) upar ho
+# Raise hand: wrist must be this much (fraction of torso length) above the shoulder
 RAISE_MARGIN_RATIO = 0.2
 
 
 # ============================================================
-# TASK CATALOG (modular — naye tasks yahan add karo)
+# TASK CATALOG (modular — add new tasks here)
 # ============================================================
 
 ACTION_LABELS = {
@@ -96,7 +97,7 @@ ACTION_LABELS = {
     "walk":             "Walk",
 }
 
-# (phrase, action) — longest-phrase-first matching parse me hota hai
+# (phrase, action) — matching parses longest-phrase-first
 TASK_PHRASES = [
     ("raise your both hands", "raise_both_hands"),
     ("raise both hands",      "raise_both_hands"),
@@ -142,13 +143,13 @@ _TASK_PHRASES_SORTED = sorted(
 
 def parse_task_text(task_text):
     """
-    Free-text task ko canonical action key me convert karta hai.
+    Converts a free-text task into a canonical action key.
 
     Returns:
-        action key (str) ya None agar task samajh nahi aaya.
+        action key (str) or None if the task is not understood.
     """
     text = (task_text or "").lower().strip()
-    text = re.sub(r"[^\w\s]", " ", text)     # punctuation hatao
+    text = re.sub(r"[^\w\s]", " ", text)     # strip punctuation
     text = re.sub(r"\s+", " ", text).strip()
 
     if not text:
@@ -162,10 +163,10 @@ def parse_task_text(task_text):
 
 
 # ============================================================
-# KEYPOINT HELPERS (pose_detection.py ke conventions ke mutabik)
+# KEYPOINT HELPERS (matching pose_detection.py conventions)
 # ============================================================
 
-# Agar keypoints raw 17-array ke roop me aaye to ye index mapping
+# If keypoints arrive as a raw 17-array, this index mapping applies
 _ARRAY_INDEX = {
     "nose": 0,
     "left_shoulder": 5, "right_shoulder": 6,
@@ -178,7 +179,7 @@ _ARRAY_INDEX = {
 
 
 def _point_valid(point):
-    """Missing/zero keypoint safe check (pose_detection jaisa hi rule)."""
+    """Missing/zero keypoint safe check (same rule as pose_detection)."""
     if point is None:
         return False
     try:
@@ -188,7 +189,7 @@ def _point_valid(point):
         y = float(point[1])
     except (TypeError, ValueError):
         return False
-    # YOLO missing point (0, 0) deta hai
+    # YOLO gives (0, 0) for a missing point
     if x <= 0 and y <= 0:
         return False
     return True
@@ -196,9 +197,9 @@ def _point_valid(point):
 
 def _get_kp(keypoints, name):
     """
-    Named keypoint nikalta hai.
-    keypoints: dict {name: (x, y)} (analyze_frame se) YA raw 17-list.
-    Returns (x, y) tuple ya None (invalid/missing).
+    Extracts a named keypoint.
+    keypoints: dict {name: (x, y)} (from analyze_frame) OR raw 17-list.
+    Returns an (x, y) tuple or None (invalid/missing).
     """
     if keypoints is None:
         return None
@@ -230,7 +231,7 @@ def _mid(a, b):
 
 
 def _angle(a, b, c):
-    """A-B-C ke beech angle (degrees), B joint point."""
+    """Angle between A-B-C (degrees), B is the joint point."""
     ba = (a[0] - b[0], a[1] - b[1])
     bc = (c[0] - b[0], c[1] - b[1])
 
@@ -248,8 +249,8 @@ def _angle(a, b, c):
 
 def _torso_length(keypoints):
     """
-    Body scale nikalta hai (shoulder-hip distance), taaki thresholds
-    camera distance se independent rahen. Fallback: shoulder width.
+    Computes the body scale (shoulder-hip distance) so thresholds
+    stay independent of camera distance. Fallback: shoulder width.
     """
     left_shoulder = _get_kp(keypoints, "left_shoulder")
     right_shoulder = _get_kp(keypoints, "right_shoulder")
@@ -285,9 +286,9 @@ def _person_confidence(person):
 
 def _geometry_confidence(person, geometry_score):
     """
-    Task confidence (0-100): YOLO person confidence + pose-geometry
-    score (0-1) ka blend. Random/dummy value nahi — dono real
-    measurements se aate hain.
+    Task confidence (0-100): a blend of YOLO person confidence and
+    the pose-geometry score (0-1). Not a random/dummy value — both
+    inputs are real measurements.
     """
     person_conf = _person_confidence(person)
     base = 70.0 + 28.0 * max(0.0, min(1.0, geometry_score))
@@ -302,7 +303,7 @@ def _geometry_confidence(person, geometry_score):
 # ============================================================
 
 def _leg_data(keypoints, side):
-    """Ek side ke hip/knee/ankle points + validity."""
+    """Hip/knee/ankle points of one side + validity."""
     hip = _get_kp(keypoints, f"{side}_hip")
     knee = _get_kp(keypoints, f"{side}_knee")
     ankle = _get_kp(keypoints, f"{side}_ankle")
@@ -314,8 +315,8 @@ def _leg_data(keypoints, side):
 
 def _detect_stand(person):
     """
-    Stand: hip-knee-ankle angle seedhi taang (>= 150 deg) +
-    vertical order (hip upar, knee beech, ankle neeche).
+    Stand: hip-knee-ankle angle shows a straight leg (>= 150 deg) +
+    vertical order (hip above, knee between, ankle below).
     """
     keypoints = person.get("keypoints")
 
@@ -372,8 +373,8 @@ def _detect_stand(person):
 
 def _detect_sit(person):
     """
-    Sit: knees bent (<= 125 deg) + hips knee-level ke paas
-    (thigh horizontal — chair/stool par baithne ka geometry).
+    Sit: knees bent (<= 125 deg) + hips near knee-level
+    (thigh horizontal — the geometry of sitting on a chair/stool).
     """
     keypoints = person.get("keypoints")
 
@@ -441,9 +442,9 @@ def _detect_sit(person):
 
 def _raise_check(keypoints, side, torso):
     """
-    Ek side ka raise check.
+    Raise check for one side.
     Returns (raised: bool, excess_ratio: 0-1+).
-    Wrist shoulder se RAISE_MARGIN_RATIO * torso upar ho.
+    The wrist must be RAISE_MARGIN_RATIO * torso above the shoulder.
     """
     shoulder = _get_kp(keypoints, f"{side}_shoulder")
     wrist = _get_kp(keypoints, f"{side}_wrist")
@@ -452,7 +453,7 @@ def _raise_check(keypoints, side, torso):
         return False, 0.0
 
     margin = RAISE_MARGIN_RATIO * torso
-    excess = (shoulder[1] - margin) - wrist[1]   # >0 => wrist upar hai
+    excess = (shoulder[1] - margin) - wrist[1]   # >0 => wrist is above
 
     if excess <= 0:
         return False, 0.0
@@ -463,8 +464,8 @@ def _raise_check(keypoints, side, torso):
 def _detect_raise_hand(person, which="either"):
     """
     Raise Right/Left/Both/Any hand:
-    wrist ko shoulder/head se compare karta hai (torso-length margin ke
-    saath, camera distance independent).
+    compares the wrist with the shoulder/head (with a torso-length
+    margin, independent of camera distance).
     """
     keypoints = person.get("keypoints")
 
@@ -528,9 +529,9 @@ def _detect_raise_either_hand(person):
 
 def _detect_walk(person):
     """
-    Walk: pose_detection ke motion tracker (hip/ankle movement across
-    frames + displacement + direction consistency) ka confirmed
-    'Walking' activity label use karta hai — real pipeline reuse.
+    Walk: uses the confirmed 'Walking' activity label from the
+    pose_detection motion tracker (hip/ankle movement across frames
+    + displacement + direction consistency) — real pipeline reuse.
     """
     activity = person.get("activity")
 
@@ -557,7 +558,7 @@ def _detect_walk(person):
     ]
 
 
-# action -> detector (naya task = naya detector + catalog entry)
+# action -> detector (new task = new detector + catalog entry)
 _ACTION_DETECTORS = {
     "stand":            _detect_stand,
     "sit":              _detect_sit,
@@ -575,11 +576,11 @@ _ACTION_DETECTORS = {
 
 def evaluate_action(action_key, persons):
     """
-    Ek frame (persons list) par action verify karta hai.
+    Verifies the action on one frame (persons list).
 
-    Multi-person: sabse strong matching person jeetta hai.
-    Missing/low-confidence keypoints safely handle hote hain
-    (detect = False + honest reason).
+    Multi-person: the strongest matching person wins.
+    Missing/low-confidence keypoints are handled safely
+    (detected = False + honest reason).
 
     Returns:
         (detected: bool, confidence: float 0-100, reasons: [str])
@@ -590,7 +591,7 @@ def evaluate_action(action_key, persons):
     if not persons:
         return False, 0.0, ["No person detected in frame"]
 
-    # Defensive: agar caller galti se single person dict bhej de
+    # Defensive: if the caller accidentally sends a single person dict
     if isinstance(persons, dict):
         persons = [persons]
 
@@ -599,7 +600,7 @@ def evaluate_action(action_key, persons):
     for person in persons:
         try:
             detected, score, reasons = _ACTION_DETECTORS[action_key](person)
-        except Exception as exc:              # kisi bhi keypoint edge case par crash nahi
+        except Exception as exc:              # never crash on keypoint edge cases
             detected, score, reasons = False, 0.0, [
                 f"Detection error handled safely: {exc}"
             ]
@@ -622,8 +623,8 @@ def detect_task(task_text, persons):
     Returns:
         {
             "task": original text,
-            "action": action key ya None,
-            "label": human label ya None,
+            "action": action key or None,
+            "label": human label or None,
             "detected": bool,
             "confidence": float 0-100,
             "reasons": [str],
@@ -668,15 +669,16 @@ STATE_NOT_COMPLETED = "NOT COMPLETED"
 
 class TaskVerificationSession:
     """
-    Ek task run ka poori state (Streamlit session_state me store hoti hai,
-    isliye har frame par reset nahi hoti).
+    Full state of one task run (stored in Streamlit session_state,
+    so it is not reset on every frame).
 
-    - Single task  -> steps list me sirf ek step (mode = "single")
-    - Multi-step   -> sequential enforcement: sirf current step verify
-                      hota hai; future steps LOCKED rehte hain.
-    - Temporal     -> current step ka pose sliding window me
-                      TASK_CONFIRM_FRAMES dafa match ho tabhi COMPLETE
-                      (ek-do flicker frame completion nahi rokte).
+    - Single task  -> only one step in the steps list (mode = "single")
+    - Multi-step   -> sequential enforcement: only the current step is
+                      verified; future steps stay LOCKED.
+    - Temporal     -> the current step's pose must match
+                      TASK_CONFIRM_FRAMES times within the sliding
+                      window before COMPLETE (one or two flicker
+                      frames do not block completion).
     """
 
     def __init__(self, task_texts, required_frames=TASK_CONFIRM_FRAMES):
@@ -690,8 +692,8 @@ class TaskVerificationSession:
             unsupported_reason = None
 
             if action is None:
-                # Object-interaction task library (lazy import — pose-only
-                # installations me ye module load hi nahi hota).
+                # Object-interaction task library (lazy import — in
+                # pose-only installations this module never loads).
                 try:
                     from object_tasks import (
                         parse_object_task,
@@ -702,7 +704,7 @@ class TaskVerificationSession:
                     obj_key, detail = None, {}
 
                 if obj_key is not None and detail.get("unsupported"):
-                    # Honest rejection — unreliable rule nahi banayenge
+                    # Honest rejection — we will not build an unreliable rule
                     unsupported_reason = UNSUPPORTED_TASKS[obj_key]["reason"]
                 elif obj_key is not None:
                     action = obj_key
@@ -729,7 +731,7 @@ class TaskVerificationSession:
         self.all_completed = False
         self.started_at = datetime.now()
 
-        # Fresh start: step 1 IN PROGRESS, baaki LOCKED
+        # Fresh start: step 1 IN PROGRESS, rest LOCKED
         if self.steps:
             self.steps[0]["state"] = STATE_IN_PROGRESS
             for step in self.steps[1:]:
@@ -779,7 +781,7 @@ class TaskVerificationSession:
         )
 
     def _step_label(self, step):
-        """Step ka human label (pose ya object task library se)."""
+        """Human label of the step (pose or object task library)."""
         action = step["action"]
 
         if action is None:
@@ -797,7 +799,7 @@ class TaskVerificationSession:
         return label or "Unrecognized"
 
     def steps_view(self):
-        """UI ke liye steps ki snapshot (icon ke saath)."""
+        """Snapshot of the steps for the UI (with icons)."""
         view = []
 
         for i, step in enumerate(self.steps):
@@ -841,18 +843,18 @@ class TaskVerificationSession:
             step["completed_at"] = None
 
     # ------------------------------------------------
-    # MAIN: har camera frame par call karo
+    # MAIN: call on every camera frame
     # ------------------------------------------------
 
     def process_persons(self, persons, object_context=None):
         """
-        Ek camera frame process karta hai (real YOLO-Pose persons list).
+        Processes one camera frame (real YOLO-Pose persons list).
 
-        Returns: result dict (UI + history ke liye) —
+        Returns: result dict (for UI + history) —
             step_completed, all_completed, events (history records),
             streak, detected, confidence, reasons, progress, ...
         """
-        # Run poora ho chuka hai ya steps hain hi nahi
+        # Run already finished or there are no steps at all
         if self.all_completed or not self.steps:
             self.last_result = self._empty_result()
             return self.last_result
@@ -877,11 +879,11 @@ class TaskVerificationSession:
             return result
 
         # ------------------------------------------------
-        # DISPATCH: object task ya pose task?
-        # Object bridge (object_tasks.check_object_task_step) sirf
-        # tab non-None deta hai jab current step OBJECT task ho.
-        # Temporal window/completion ka owner neeche wala shared code
-        # hi hai — dono paths ke liye identical.
+        # DISPATCH: object task or pose task?
+        # The object bridge (object_tasks.check_object_task_step) returns
+        # non-None only when the current step is an OBJECT task.
+        # The temporal window/completion owner is the shared code
+        # below — identical for both paths.
         # ------------------------------------------------
 
         object_frame = None
@@ -912,10 +914,10 @@ class TaskVerificationSession:
 
         # --------------------------------------------
         # TEMPORAL CONFIRMATION (sliding window)
-        # Required pose ko window ke andar required_frames dafa
-        # detect hona chahiye. Ek-do flicker frame (YOLO threshold
-        # ke paas wiggle karta hai) confirm hona nahi rokta, lekin
-        # pose sach me na ho to match-count badhta hi nahi —
+        # The required pose must be detected required_frames times
+        # inside the window. One or two flicker frames (YOLO wiggles
+        # near the threshold) do not block confirmation, but if the
+        # pose is genuinely absent the match-count never grows —
         # false positive safe.
         # --------------------------------------------
 
@@ -926,7 +928,7 @@ class TaskVerificationSession:
                 self.best_streak_confidence = max(
                     self.best_streak_confidence, confidence
                 )
-        # Person absent frame: window me count NAHI hota (hold)
+        # Person-absent frame: not counted in the window (hold)
 
         self.streak = sum(self.recent)
 
@@ -986,7 +988,7 @@ class TaskVerificationSession:
                     "confidence": round(avg_conf, 1),
                 })
             else:
-                # Next step ab IN PROGRESS (sequential unlock)
+                # Next step is now IN PROGRESS (sequential unlock)
                 self.steps[self.current_index]["state"] = (
                     STATE_IN_PROGRESS
                 )
@@ -1024,11 +1026,11 @@ class TaskVerificationSession:
 
 
 # ============================================================
-# CONVENIENCE WRAPPERS (spec ke naam ke mutabik)
+# CONVENIENCE WRAPPERS (names matching the spec)
 # ============================================================
 
 def verify_task_step(session, persons, object_context=None):
-    """Multi-step session ka ek frame process karo (pose ya object task)."""
+    """Process one frame of a multi-step session (pose or object task)."""
     return session.process_persons(
         persons, object_context=object_context
     )
@@ -1037,8 +1039,8 @@ def verify_task_step(session, persons, object_context=None):
 def verify_single_task(task_text, persons, session=None):
     """
     Single task verification.
-    session Streamlit session_state me rakha hota hai — agar None hai
-    to naya ban jaata hai (temporal confirmation ke saath).
+    The session is kept in Streamlit session_state — if None,
+    a new one is created (with temporal confirmation).
     """
     if session is None:
         session = TaskVerificationSession([task_text])

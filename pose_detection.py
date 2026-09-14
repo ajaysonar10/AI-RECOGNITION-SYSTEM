@@ -3,18 +3,18 @@ pose_detection.py
 =================
 Person detection + position + activity (with justification).
 
-Do functions milte hain:
+Two functions are provided:
 
 1) detect_pose(frame)
    -> (annotated_frame, keypoints)
-   [Purana compatible interface — camera.py ke liye]
+   [Legacy-compatible interface — for camera.py]
 
 2) analyze_frame(frame)
    -> (annotated_frame, persons)
-   Har person ke liye:
-      - Position  (bbox, center, frame mein region)
+   For every person:
+      - Position  (bbox, center, frame region)
       - Activity  (Standing / Sitting / Walking / Unknown)
-      - Justification (kis wajah se activity detect hui)
+      - Justification (why the activity was detected)
 """
 
 import math
@@ -46,23 +46,22 @@ KEYPOINT_NAMES = (
 # ACTIVITY THRESHOLDS
 # ============================================================
 
-KNEE_STRAIGHT_ANGLE = 155.0   # iske upar = taang seedhi (Standing)
-KNEE_BENT_ANGLE = 125.0       # isse neeche = taang mudi hui (Sitting)
-MOTION_HISTORY_LEN = 12       # itne frames ki movement yaad rakhte hain
+KNEE_STRAIGHT_ANGLE = 155.0   # above this = legs straight (Standing)
+KNEE_BENT_ANGLE = 125.0       # below this = legs bent (Sitting)
+MOTION_HISTORY_LEN = 12       # remember this many frames of movement
 
 # Walking detection (jitter-proof):
-WALK_MIN_MOVEMENT = 4.0        # avg movement (px/frame) kam se kam itna ho
-WALK_MIN_DISPLACEMENT = 25.0   # net displacement (px) — jitter isse chhota hota hai
-WALK_MIN_CONSISTENCY = 0.55    # net/path ratio — walking me ~1.0, random jitter me ~0
-WALK_CONFIRM_FRAMES = 4        # lagatar itne frames test pass kare tabhi Walking
-WALK_EXIT_FRAMES = 6           # lagatar itne frames fail hone par Walking exit
+WALK_MIN_MOVEMENT = 4.0        # avg movement (px/frame) must be at least this
+WALK_MIN_DISPLACEMENT = 25.0   # net displacement (px) — jitter is smaller than this
+WALK_MIN_CONSISTENCY = 0.55    # net/path ratio — ~1.0 when walking, ~0 for random jitter
+WALK_CONFIRM_FRAMES = 4        # Walking only after this many consecutive passing frames
+WALK_EXIT_FRAMES = 6           # Walking exits after this many consecutive failing frames
 
 
 # ============================================================
 # SIMPLE TRACKER
-# (Walking detect karne ke liye har person ki movement
-#  track karni zaroori hai — isliye har person ko ek
-#  track ID dete hain nearest-center matching se)
+# (To detect Walking, each person's movement must be tracked —
+#  so every person gets a track ID via nearest-center matching)
 # ============================================================
 
 class _PersonTrack:
@@ -73,7 +72,7 @@ class _PersonTrack:
         self.history.append(center)
         self.missed = 0
 
-        # Walking hysteresis state (jitter false-positives rokne ke liye)
+        # Walking hysteresis state (to block jitter false-positives)
         self.is_walking = False
         self.walk_streak = 0
         self.still_streak = 0
@@ -86,7 +85,7 @@ class _PersonTrack:
         self.missed += 1
 
     def average_movement(self):
-        """Recent frames mein body center ka average movement (px/frame)."""
+        """Average movement of the body center in recent frames (px/frame)."""
         if len(self.history) < 3:
             return 0.0
 
@@ -100,9 +99,10 @@ class _PersonTrack:
 
     def net_displacement(self):
         """
-        History ke start aur end points ke beech seedha distance (px).
-        Standing/jitter me ye bahut chhota hota hai,
-        Walking me bada (body actually aage badhti hai).
+        Straight-line distance (px) between the first and last
+        history points.
+        Very small for Standing/jitter,
+        large for Walking (the body actually moves forward).
         """
         if len(self.history) < 2:
             return 0.0
@@ -111,7 +111,7 @@ class _PersonTrack:
         return math.dist(pts[0], pts[-1])
 
     def total_path(self):
-        """History ke saare steps ka total distance (px)."""
+        """Total distance of all steps in the history (px)."""
         if len(self.history) < 2:
             return 0.0
 
@@ -126,9 +126,9 @@ class _PersonTrack:
     def passes_walking_test(self):
         """
         Jitter-proof walking test — 3 conditions:
-          1. Average movement threshold se zyada
-          2. Net displacement bada (sirf wobble nahi)
-          3. Direction consistent (net / total path high)
+          1. Average movement above the threshold
+          2. Large net displacement (not just wobble)
+          3. Consistent direction (net / total path high)
         """
         movement = self.average_movement()
 
@@ -154,9 +154,9 @@ class _PersonTrack:
 
     def update_walking_state(self):
         """
-        Hysteresis: Walking me ENTER karne ke liye WALK_CONFIRM_FRAMES
-        lagatar test pass karne padte hain, aur EXIT karne ke liye
-        WALK_EXIT_FRAMES lagatar fail.
+        Hysteresis: to ENTER Walking, the test must pass for
+        WALK_CONFIRM_FRAMES consecutive frames; to EXIT, it must
+        fail for WALK_EXIT_FRAMES consecutive frames.
         Returns: (is_walking, streak_count)
         """
         passed = self.passes_walking_test()
@@ -191,13 +191,13 @@ class _PersonTrack:
 
 _tracks = []
 _next_track_id = 1
-_TRACK_MATCH_MAX_DIST = 120   # px — isse zyada door wala match reject
-_TRACK_MAX_MISSED = 15        # itne frames tak gayab person ko yaad rakho
+_TRACK_MATCH_MAX_DIST = 120   # px — matches farther than this are rejected
+_TRACK_MAX_MISSED = 15        # remember a missing person for this many frames
 
 
 def _update_tracks(centers):
     """
-    Har person ko previous frame ke nearest track se match karta hai.
+    Matches every person to the nearest track from the previous frame.
     Returns: list of _PersonTrack (same order as centers)
     """
     global _tracks, _next_track_id
@@ -226,25 +226,25 @@ def _update_tracks(centers):
             matched_tracks.append(best_track)
 
         else:
-            # Naya person frame mein aaya hai
+            # A new person has entered the frame
             track = _PersonTrack(_next_track_id, center)
             _next_track_id += 1
             matched_tracks.append(track)
 
-    # Jo tracks is frame mein match nahi hue unhe "missed" mark karo
+    # Mark tracks that did not match this frame as "missed"
     matched_ids = {t.track_id for t in matched_tracks}
 
     for track in _tracks:
         if track.track_id not in matched_ids:
             track.mark_missed()
 
-    # Surviving tracks: matched + unmatched (jo abhi gayab hain)
+    # Surviving tracks: matched + unmatched (currently missing)
     _tracks = matched_tracks + [
         t for t in _tracks
         if t.track_id not in matched_ids
     ]
 
-    # Bahut purane gayab tracks hata do
+    # Drop very old missing tracks
     _tracks = [
         t for t in _tracks
         if t.missed <= _TRACK_MAX_MISSED
@@ -254,14 +254,14 @@ def _update_tracks(centers):
 
 
 # ============================================================
-# TRACKER RESET (naye video / task evaluation ke liye)
+# TRACKER RESET (for a new video / task evaluation)
 # ============================================================
 
 def reset_tracker():
     """
-    Saare person tracks reset kar deta hai.
-    Naye video ya task evaluation shuru karne se pehle call karo,
-    taaki purani movement history naye analysis ko affect na kare.
+    Resets all person tracks.
+    Call before starting a new video or task evaluation,
+    so old movement history does not affect the new analysis.
     """
     global _tracks, _next_track_id
 
@@ -274,7 +274,7 @@ def reset_tracker():
 # ============================================================
 
 def _point_valid(point):
-    """Check karta hai ki keypoint valid hai ya nahi."""
+    """Checks whether the keypoint is valid or not."""
 
     if point is None:
         return False
@@ -285,7 +285,7 @@ def _point_valid(point):
     x = float(point[0])
     y = float(point[1])
 
-    # YOLO mein missing point (0, 0) hota hai
+    # A missing point in YOLO is (0, 0)
     if x <= 0 and y <= 0:
         return False
 
@@ -294,7 +294,7 @@ def _point_valid(point):
 
 def _angle(a, b, c):
     """
-    A-B-C points ke beech angle (degrees).
+    Angle between points A-B-C (degrees).
     B = middle/joint point.
     """
     if not (_point_valid(a) and _point_valid(b) and _point_valid(c)):
@@ -316,7 +316,7 @@ def _angle(a, b, c):
 
 
 def _mid(a, b):
-    """Do points ka center (None-safe)."""
+    """Center of two points (None-safe)."""
     if not (_point_valid(a) and _point_valid(b)):
         return None
 
@@ -332,11 +332,11 @@ def _mid(a, b):
 
 def _describe_position(bbox, frame_w, frame_h):
     """
-    Person ki position describe karta hai:
-      - bbox pixels mein
+    Describes a person's position:
+      - bbox in pixels
       - body center
       - normalized (0-1) coordinates
-      - frame ke kis region mein hai (top/middle/bottom + left/center/right)
+      - frame region (top/middle/bottom + left/center/right)
     """
 
     x1, y1, x2, y2 = [float(v) for v in bbox]
@@ -384,8 +384,8 @@ def _describe_position(bbox, frame_w, frame_h):
 
 def _analyze_activity(keypoints, track):
     """
-    Keypoints + movement history se activity nikalta hai
-    aur har decision ka reason (justification) return karta hai.
+    Extracts the activity from keypoints + movement history
+    and returns a reason (justification) for every decision.
 
     Returns: (activity, confidence, reasons_list)
     """
@@ -435,7 +435,7 @@ def _analyze_activity(keypoints, track):
         avg_knee_angle = sum(valid_angles) / len(valid_angles)
 
     # ------------------------------------------------
-    # TORSO TILT (khada vs jhuka hua)
+    # TORSO TILT (upright vs leaning)
     # ------------------------------------------------
 
     shoulder_center = _mid(left_shoulder, right_shoulder)
@@ -450,7 +450,7 @@ def _analyze_activity(keypoints, track):
             reasons.append(f"Torso tilt: {torso_tilt:.0f} deg")
 
     # ------------------------------------------------
-    # BODY MOVEMENT (tracker history se)
+    # BODY MOVEMENT (from tracker history)
     # ------------------------------------------------
 
     movement = track.average_movement() if track is not None else 0.0
@@ -477,11 +477,11 @@ def _analyze_activity(keypoints, track):
     # ------------------------------------------------
     # WALKING CHECK (jitter-proof + hysteresis)
     # ------------------------------------------------
-    # Sirf per-frame movement se Walking nahi keh sakte
-    # kyunki standing me bhi body/camera jitter hota hai.
-    # Isliye: movement + net displacement + direction
-    # consistency teeno check hote hain, aur CONFIRM
-    # frames ka streak poora hona chahiye.
+    # Walking cannot be claimed from per-frame movement alone,
+    # because standing also has body/camera jitter.
+    # Therefore all three checks run: movement + net displacement
+    # + direction consistency, and the CONFIRM-frame streak
+    # must be complete.
 
     if track is not None:
 
@@ -548,7 +548,7 @@ def _analyze_activity(keypoints, track):
         return "Standing", confidence, reasons
 
     # ------------------------------------------------
-    # UNKNOWN (legs clearly visible nahi hain)
+    # UNKNOWN (legs are not clearly visible)
     # ------------------------------------------------
 
     reasons.insert(
@@ -569,12 +569,12 @@ def _analyze_activity(keypoints, track):
 
 def detect_pose(frame):
     """
-    Purana compatible interface (camera.py ke liye).
+    Legacy-compatible interface (for camera.py).
 
     Returns:
         (annotated_frame, keypoints)
-        keypoints = pehle person ke 17 keypoints ka numpy array
-                    (person nahi mila to None)
+        keypoints = numpy array of the first person's 17 keypoints
+                    (None if no person was found)
     """
     results = model(frame, verbose=False)
 
@@ -597,7 +597,7 @@ def detect_pose(frame):
 
 def analyze_frame(frame):
     """
-    FULL ANALYSIS: har person ki position + activity + justification.
+    FULL ANALYSIS: position + activity + justification for every person.
 
     Returns:
         (annotated_frame, persons)
@@ -632,7 +632,7 @@ def analyze_frame(frame):
         return annotated_frame, persons
 
     # ------------------------------------------------
-    # Step 1: har person ka body center nikalo (tracking ke liye)
+    # Step 1: compute each person's body center (for tracking)
     # ------------------------------------------------
 
     centers = []
@@ -648,7 +648,7 @@ def analyze_frame(frame):
                 center = _mid(xy[11], xy[12])  # hip center
 
         if center is None:
-            # Keypoints nahi mile to bbox center use karo
+            # Fall back to bbox center when keypoints are missing
             bbox = boxes.xyxy[i].cpu().numpy()
             center = (
                 (float(bbox[0]) + float(bbox[2])) / 2,
@@ -657,11 +657,11 @@ def analyze_frame(frame):
 
         centers.append(center)
 
-    # Step 2: tracker update (Walking ke liye movement history)
+    # Step 2: tracker update (movement history for Walking)
     tracks = _update_tracks(centers)
 
     # ------------------------------------------------
-    # Step 3: har person ka full analysis
+    # Step 3: full analysis for every person
     # ------------------------------------------------
 
     for i in range(person_count):
@@ -703,7 +703,7 @@ def analyze_frame(frame):
         })
 
         # ------------------------------------------------
-        # Frame par activity label draw karo
+        # Draw the activity label on the frame
         # ------------------------------------------------
 
         x1, y1 = int(bbox[0]), int(bbox[1])
@@ -727,7 +727,7 @@ def analyze_frame(frame):
 
 
 # ============================================================
-# LIVE DEMO (direct run karne par)
+# LIVE DEMO (when run directly)
 # ============================================================
 
 if __name__ == "__main__":

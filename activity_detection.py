@@ -2,13 +2,13 @@ import math
 from collections import deque
 
 
-# Walking ke liye previous body positions store karenge
+# Store previous body positions for Walking detection
 motion_history = deque(maxlen=15)
 
 
 def calculate_angle(a, b, c):
     """
-    A-B-C points ke beech angle calculate karta hai.
+    Calculates the angle between points A-B-C.
     B = middle/joint point
     """
 
@@ -41,7 +41,7 @@ def calculate_angle(a, b, c):
             magnitude_ba * magnitude_bc
         )
 
-        # Floating-point error avoid karne ke liye
+        # Avoid floating-point error
         cosine_angle = max(
             -1.0,
             min(1.0, cosine_angle)
@@ -59,7 +59,7 @@ def calculate_angle(a, b, c):
 
 def point_valid(point):
     """
-    Check karta hai ki keypoint valid hai ya nahi.
+    Checks whether the keypoint is valid or not.
     """
 
     if point is None:
@@ -71,7 +71,7 @@ def point_valid(point):
     x = float(point[0])
     y = float(point[1])
 
-    # YOLO mein missing point ke case ko handle karna
+    # Handle the case of a missing point in YOLO
     if x <= 0 and y <= 0:
         return False
 
@@ -80,7 +80,7 @@ def point_valid(point):
 
 def average_point(a, b):
     """
-    Do points ka center calculate karta hai.
+    Calculates the center of two points.
     """
 
     if not point_valid(a) or not point_valid(b):
@@ -94,11 +94,10 @@ def average_point(a, b):
 
 def detect_activity(keypoints):
     """
-    YOLO Pose keypoints se:
+    From YOLO Pose keypoints, detects:
         Standing
         Sitting
         Walking
-    detect karta hai.
 
     YOLO COCO keypoints:
 
@@ -244,8 +243,8 @@ def detect_activity(keypoints):
     # WALKING DETECTION
     # -------------------------------------------------
 
-    # Walking tabhi consider karenge jab
-    # enough body movement ho.
+    # We only consider Walking when there is
+    # enough body movement.
 
     if len(motion_history) >= 8:
 
@@ -331,8 +330,8 @@ def detect_activity(keypoints):
     # PARTIAL BODY / UNKNOWN
     # -------------------------------------------------
 
-    # Agar legs properly visible nahi hain,
-    # to galat Standing/Walking claim nahi karenge.
+    # If the legs are not properly visible,
+    # we will not make a false Standing/Walking claim.
 
     if shoulder_center is not None and hip_center is not None:
 
