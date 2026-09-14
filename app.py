@@ -211,8 +211,6 @@ with st.sidebar:
 
     st.caption("BAS EXPERIMENT")
 
-    st.success("SYSTEM ONLINE")
-
     st.caption("SIH 2026")
 
 
