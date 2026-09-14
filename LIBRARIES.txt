@@ -1,0 +1,297 @@
+================================================================
+ BAS-AI | AI RECOGNITION SYSTEM
+ LIBRARIES & DEPENDENCIES - COMPLETE REFERENCE
+================================================================
+Repository  : https://github.com/ajaysonar10/AI-RECOGNITION-SYSTEM
+Branch      : main
+Generated   : 14 September 2026
+Python ver. : 3.14.7
+OS          : Windows (x64)
+
+----------------------------------------------------------------
+1. OVERVIEW
+----------------------------------------------------------------
+BAS-AI is a real-time Human Activity Recognition System built for
+on-board space experiment monitoring (Smart India Hackathon 2026).
+
+It uses YOLO11 deep-learning models for human pose estimation and
+object detection, OpenCV for camera/video processing, and a
+Streamlit web dashboard for the user interface. Text-to-speech
+voice alerts are generated with pyttsx3.
+
+Requirements file: requirements.txt
+---------------------------------
+streamlit
+opencv-python
+ultralytics
+numpy
+pyttsx3
+
+----------------------------------------------------------------
+2. THIRD-PARTY LIBRARIES
+----------------------------------------------------------------
+
+2.1 STREAMLIT
+----------------------------------------
+Installed version : 1.63.0
+Role in project   : Web application framework - the entire user
+                    interface runs on Streamlit.
+
+Used in files:
+  - app.py        : dashboard, navigation, analytics, history,
+                    settings, system status pages
+  - camera.py     : live camera monitoring UI
+
+Features used in this project:
+  - st.set_page_config, custom CSS theming (dark space theme)
+  - Sidebar navigation (st.radio) and multi-page layout
+  - Live widgets: buttons, sliders, toggles, selectbox
+  - Real-time metrics: st.metric, st.progress, st.empty()
+  - st.dataframe for activity tables
+  - st.bar_chart for activity distribution analytics
+  - st.session_state for persisting camera/detection state
+  - Auto-refresh render loop for the live camera feed
+
+General library features:
+  - Turns Python scripts into shareable web apps (no HTML/JS)
+  - Rerun-based reactive execution model
+  - Built-in caching, widgets, charts, media elements
+  - Free, open-source, pure Python
+
+2.2 OPENCV (opencv-python)
+----------------------------------------
+Installed version : 5.0.0.93
+Role in project   : Camera input, video streams, and frame-level
+                    image processing.
+
+Used in files:
+  - camera.py, live_retest.py, live_task_suite.py,
+    live_pose_detection.py, pose_detection.py,
+    object_detection.py, object_tracking.py, task_eval.py
+
+Features used in this project:
+  - cv2.VideoCapture(0)            : laptop webcam capture
+  - cv2.VideoCapture(url)          : mobile IP camera (DroidCam/
+                                     IP Webcam) stream over Wi-Fi
+  - cap.read()                     : per-frame grab in loop
+  - cv2.cvtColor(BGR2RGB)          : color conversion for Streamlit
+  - cv2.putText                    : status overlays on frames
+  - cv2.imshow / cv2.destroyAllWindows : standalone demo windows
+  - cv2.rectangle                  : reach-zone visualization
+
+General library features:
+  - 2500+ optimized image/video processing algorithms
+  - Real-time computer vision (C++ core, Python bindings)
+  - Image transforms, filtering, geometry, drawing
+  - Cross-platform (Windows/Linux/Mac/Android)
+
+2.3 ULTRALYTICS (YOLO11)
+----------------------------------------
+Installed version : 8.4.149
+Role in project   : The AI engine - pose estimation and object
+                    detection models and inference.
+
+Used in files:
+  - pose_detection.py        : YOLO("yolo11n-pose.pt") - 17 COCO
+                               keypoints per person
+  - object_detection.py      : YOLO("yolo11n.pt") - COCO 80-class
+                               object detection
+  - live_pose_detection.py   : standalone live pose demo
+
+Features used in this project:
+  - model(frame, verbose=False)  : single-frame inference
+  - results[0].keypoints.xy      : keypoint (x, y) coordinates
+  - results[0].boxes             : bounding boxes + confidences
+  - results[0].plot()            : auto-annotated frame (skeletons,
+                                   boxes, labels)
+  - Auto model download on first run
+
+General library features:
+  - Train/deploy/monitor YOLO models (detect, segment, classify,
+    pose, OBB, track)
+  - CPU and GPU (CUDA) inference support
+  - Simple, consistent Python API
+  - Built-in plotting and result exporting
+
+2.4 NUMPY
+----------------------------------------
+Installed version : 2.5.3
+Role in project   : Numerical foundation - keypoint coordinate
+                    arrays and all distance/geometry math.
+
+Used in files:
+  - pose_detection.py  : keypoints.xy[0].cpu().numpy()
+  - Indirectly everywhere OpenCV and PyTorch data flows
+
+Features used in this project:
+  - numpy() conversion of YOLO keypoint tensors
+  - Array indexing to extract shoulders/hips/knees/ankles
+  - Coordinate math for angles and movement tracking
+
+General library features:
+  - Fast N-dimensional arrays (ndarray)
+  - Vectorized math, broadcasting, linear algebra
+  - Base data layer for OpenCV, PyTorch, pandas
+
+2.5 PYTTSX3
+----------------------------------------
+Installed version : 2.99
+Role in project   : Offline voice alerts - speaks warnings when
+                    the user performs the wrong activity for
+                    10+ seconds during a task.
+
+Used in files:
+  - camera.py : text-to-speech alert engine, run in a background
+                thread so video never stutters
+
+Features used in this project:
+  - pyttsx3.init()                 : create TTS engine
+  - engine.say(text) + engine.runAndWait() : speak alert
+  - Background thread (threading)  : non-blocking speech
+
+General library features:
+  - Fully OFFLINE text-to-speech (no internet/API key needed)
+  - Works on Windows (SAPI5), Linux (espeak), macOS (NSSS)
+  - Adjustable rate, volume, and voice selection
+
+2.6 PYTORCH (torch) + TORCHVISION - automatic dependency
+----------------------------------------
+Installed version : torch 2.14.0, torchvision 0.29.0
+Role in project   : Deep-learning backend that Ultralytics runs
+                    on. Not imported directly in the code; it is
+                    installed automatically with ultralytics.
+
+Features:
+  - Tensor computation on CPU/GPU
+  - Neural network building blocks and model loading
+  - torchvision: image transforms and pretrained weights
+
+----------------------------------------------------------------
+3. PYTHON STANDARD LIBRARY MODULES USED
+----------------------------------------------------------------
+
+3.1 math
+    Files : activity_detection.py, pose_detection.py,
+            object_tracking.py, object_tasks.py, task_detection.py
+    Use   : Knee-angle calculation (acos/degrees), hip movement
+            distance (sqrt), geometry thresholds.
+
+3.2 collections.deque
+    Files : activity_detection.py, pose_detection.py,
+            object_tracking.py, task_detection.py
+    Use   : Fixed-size rolling buffers for motion history
+            (walking detection) and track smoothing.
+
+3.3 re (regular expressions)
+    Files : task_detection.py, task_eval.py
+    Use   : Parsing natural-language task text with word-boundary
+            matching ("sit" must not match "visit").
+
+3.4 datetime
+    Files : app.py, camera.py, task_detection.py
+    Use   : Date/time stamps for the activity history table and
+            logs.
+
+3.5 time
+    Files : camera.py, task_eval.py, live_retest.py,
+            live_task_suite.py
+    Use   : Frame pacing, 1-sample-per-second logging, 10-second
+            wrong-activity timer, elapsed session stats.
+
+3.6 threading
+    Files : camera.py
+    Use   : Runs pyttsx3 voice alerts in a separate thread so the
+            camera loop keeps running smoothly while speaking.
+
+3.7 os / sys
+    Files : test_walking_fix.py, test_object_tasks.py,
+            test_task_verification.py, live_retest.py,
+            live_task_suite.py
+    Use   : Project-path setup so scripts run from any directory.
+
+3.8 random
+    Files : test_walking_fix.py
+    Use   : Simulated jitter/drift movement to regression-test the
+            walking detector without a camera.
+
+----------------------------------------------------------------
+4. AI MODEL FILES
+----------------------------------------------------------------
+
+4.1 yolo11n-pose.pt  (in repository, ~6 MB)
+    - YOLO11 nano pose-estimation model
+    - Detects 17 COCO human keypoints: nose, eyes, ears,
+      shoulders, elbows, wrists, hips, knees, ankles
+    - Used for: Standing / Sitting / Walking classification
+
+4.2 yolo11n.pt  (auto-downloaded by ultralytics on first run)
+    - YOLO11 nano object-detection model
+    - Detects 80 COCO classes (bottle, chair, laptop, phone,
+      book, table, etc.)
+    - Used for: object tasks (pick up bottle, bottle on table,
+      move bottle places...) and person-object proximity checks
+
+----------------------------------------------------------------
+5. HOW THE LIBRARIES WORK TOGETHER (PIPELINE)
+----------------------------------------------------------------
+
+  Webcam / Mobile IP camera
+          |
+        [OpenCV]  cap.read() -> raw frame
+          |
+   +------+------+
+   |             |
+[YOLO pose]  [YOLO objects]
+   |             |
+ 17 keypoints  boxes+labels
+   |             |
+[math + deque]   |
+ activity +      |
+ confidence      |
+   |             |
+   +------+------+
+          |
+[task logic: parse text (re), proximity, timers (time)]
+          |
+   +------+------+
+   |             |
+[Streamlit UI]  [pyttsx3 voice alert]
+ dashboard,     wrong-activity
+ metrics,       warnings in
+ charts         background thread
+
+----------------------------------------------------------------
+6. INSTALLATION
+----------------------------------------------------------------
+
+  # 1. Clone
+  git clone https://github.com/ajaysonar10/AI-RECOGNITION-SYSTEM.git
+  cd AI-RECOGNITION-SYSTEM
+
+  # 2. Install dependencies
+  pip install -r requirements.txt
+
+  # 3. Run
+  streamlit run app.py
+
+  First run downloads yolo11n.pt automatically.
+  yolo11n-pose.pt is already included in the repository.
+
+----------------------------------------------------------------
+7. APPLICATION FEATURES SUMMARY
+----------------------------------------------------------------
+  - Real-time human pose detection (skeleton overlay on video)
+  - Activity recognition: Walking / Standing / Sitting
+  - Laptop webcam OR mobile camera (IP webcam over Wi-Fi)
+  - Live task evaluation: type a task in plain English, AI
+    verifies it frame-by-frame and gives a completion report
+  - Object tasks: pick up bottle, bottle on table, move bottle
+    between places, take object out of box, etc.
+  - 10-second wrong-activity detection with offline voice alert
+  - Activity history table + analytics dashboard (distribution
+    chart, average confidence, anomaly count)
+  - Step-by-step task progress bar and validation checklist
+
+================================================================
+ END OF DOCUMENT
+================================================================
