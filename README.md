@@ -98,6 +98,34 @@ python live_pose_detection.py   # simple webcam skeleton demo
 
 ---
 
+## 🖥️ Offline Desktop Application
+
+No browser and no Python installation needed — BAS•AI runs as a native Windows desktop app.
+
+### Option A — Standalone .exe (for any Windows PC)
+
+Build it once (on a PC with Python):
+
+```bash
+pip install pywebview pyinstaller
+python build_exe.py
+```
+
+Then share the whole `dist/BAS-AI/` folder (zip it). Double-click **BAS-AI.exe** — the dashboard opens in a native app window with both YOLO models bundled.
+
+### Option B — Python launcher (developer mode)
+
+```bash
+pip install pywebview
+python desktop_app.py
+```
+
+Launches the Streamlit server on a free local port and opens it in a native desktop window (falls back to the default browser if WebView2 is unavailable).
+
+> 💡 Everything works fully **offline**: AI inference (YOLO), voice alerts (pyttsx3), and the dashboard (localhost server).
+
+---
+
 ## 🧠 Activity Detection Logic
 
 | Activity | Signal | Threshold |
