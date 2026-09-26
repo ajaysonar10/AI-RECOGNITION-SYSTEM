@@ -1,0 +1,592 @@
+================================================================================
+ BAS-AI | AI RECOGNITION SYSTEM
+ PROGRAM WORKING — STEP BY STEP (FILE-BY-FILE ANALYSIS)
+================================================================================
+Generated : 26 September 2026
+Project   : AI-RECOGNITION-SYSTEM (BAS-AI, Smart India Hackathon 2026)
+Purpose   : On-board Human Activity Recognition for space experiment monitoring
+Stack     : Python, Streamlit, OpenCV, Ultralytics YOLO11, pyttsx3, PyInstaller
+
+--------------------------------------------------------------------------------
+0. WHAT THIS PROGRAM DOES (BIG PICTURE)
+--------------------------------------------------------------------------------
+BAS-AI reads a live camera feed (laptop webcam or a mobile IP camera),
+detects every PERSON and every OBJECT in the frame, gives each person a
+stable TRACK ID, classifies their ACTIVITY (Standing / Sitting / Walking /
+Unknown) with a transparent JUSTIFICATION, and verifies user-defined TASKS
+("pick up the bottle", "raise right hand", "move the bottle from Place 1
+to Place 2"...) by watching the geometry of body keypoints and object
+motion over time. Results appear on a dark-space themed Streamlit
+dashboard with live metrics, checklists, history tables, analytics, and
+offline voice alerts (pyttsx3). The whole app can also be packaged into a
+standalone Windows .exe that runs fully offline.
+
+--------------------------------------------------------------------------------
+1. RUNTIME FLOW AT A GLANCE (PIPELINE)
+--------------------------------------------------------------------------------
+
+  Webcam (index 0) / Mobile IP cam (http://IP:PORT/video)
+        |
+        v  [OpenCV cv2.VideoCapture] — camera.py / task_eval.py grabs frames
+        |
+  +-----+-------------------------+
+  |                               |
+  v                               v
+[pose_detection.py]        [object_detection.py]
+ YOLO11n-pose               YOLO11n (detection)
+ 17 COCO keypoints          all 80 COCO classes
+ per person + bboxes        boxes + labels + conf
+  |                               |
+  v                               v
+[position + activity +      [ObjectTracker — object_tracking.py]
+ justification]             persistent object tracks:
+  |                          movement history, lift,
+  |                          hold (hand proximity),
+  |                          container membership
+  |                               |
+  +---------+---------------------+
+            |
+            v
+ [task layer]
+  - step_validator.py        : fixed sequence Standing->Walking->Sitting
+  - task_eval.py             : free-text task -> live evaluation + verdict
+  - task_detection.py        : pose-task detectors + temporal/sequential
+  |                            state machine (TaskVerificationSession)
+  - object_tasks.py          : 22 object-interaction task handlers
+            |
+    +-------+-----------------+
+    v                         v
+ [Streamlit UI]          [pyttsx3 voice alerts]
+ app.py (pages)          wrong-activity warnings,
+ camera.py (live loop)   background thread
+
+--------------------------------------------------------------------------------
+2. FILE-BY-FILE WORKING
+--------------------------------------------------------------------------------
+
+============================================================================
+2.1 app.py — STREAMLIT DASHBOARD (MAIN ENTRY POINT)
+============================================================================
+Role: UI shell. Run with `streamlit run app.py`.
+
+Steps it performs:
+ 1. Page config: title "BAS-AI", wide layout, dark space theme via a
+    large custom-CSS block (background gradients, styled sidebar, metric
+    cards, buttons, inputs, hidden menus).
+ 2. Session state init: "activity_history" (all detections) and
+    "task_history" (task-verification events — kept separate).
+ 3. Sidebar: mission banner + st.radio navigation with 4 pages.
+ 4. Top header: title, "HUMAN ACTIVITY RECOGNITION SYSTEM", ONLINE badge.
+ 5. Page dispatch:
+    - HOME (Dashboard): hero text + 3 "Core Intelligence" cards
+      (Activity Recognition / Crew Monitoring / Anomaly Detection) +
+      mission info columns.
+    - LIVE MONITOR: calls camera.show_task_verification() — the live
+      camera + task verification page (activity monitor and task
+      evaluation code remain in camera.py but are not in the nav).
+    - ACTIVITY HISTORY: renders st.session_state.activity_history as a
+      table (Date/Time/Activity/Confidence/Status), summary metrics
+      (Total / Normal / Anomalies), plus the separate task-verification
+      history table.
+    - ANALYTICS: totals, average confidence, anomaly count, activity
+      distribution bar chart, model-confidence progress bar.
+
+============================================================================
+2.2 camera.py — LIVE CAMERA + UI INTEGRATION (THE BIGGEST GLUE FILE)
+============================================================================
+Role: connects all AI modules to the Streamlit UI. Contains three big
+screens plus helpers.
+
+Helpers:
+ - _parse_any(text): tries parse_task_text() (pose tasks) first, then
+   parse_object_task() (object tasks). Returns (kind, key, label, detail)
+   where kind = "pose" | "object" | "unsupported" | None.
+ - _texts_need_objects(texts): true if any task text is a supported
+   object-interaction task (drives whether the object UI + YOLO-object
+   inference run at all).
+ - _prepare_object_context(texts): builds a fresh ObjectTracker +
+   ObjectTaskContext on Start/Reset; copies UI options (chosen color,
+   sort order, count) into the context; leaves the context None for
+   pose-only runs (extra YOLO-object inference is then skipped).
+ - speak_alert(message): runs pyttsx3 engine in a background daemon
+   thread so speech never blocks the video loop.
+ - draw_object_boxes(frame, objects): draws orange boxes + "name conf%"
+   labels for objects over the pose-annotated frame.
+ - _task_camera(cap_type): opens laptop camera (on Windows prefers the
+   DirectShow backend CAP_DSHOW, falls back to default) or mobile
+   stream URL http://<ip>:<port>/video.
+
+Screen A — show_camera() (activity monitor):
+ 1. Camera source radio: Laptop / Mobile (+ IP and port inputs).
+ 2. Start/Stop buttons toggle st.session_state.camera_running.
+ 3. Creates placeholders: video frame, 4 metrics (activity, confidence,
+    system, objects), progress bar, detection banner, step-evaluation
+    metrics, objects summary, person position/justification panel,
+    live activity stream.
+ 4. Opens the VideoCapture (laptop index 0 or mobile URL).
+ 5. MAIN LOOP (while camera_running):
+    a. cap.read() -> frame.
+    b. analyze_frame(frame) -> annotated frame + persons list.
+    c. detect_objects(frame) -> objects; drawn on the frame.
+    d. First person -> activity + confidence (or "No Person").
+    e. Sequential step validation via StepValidator
+       (st.session_state.step_validator): check_activity(activity) ->
+       CORRECT / WRONG / COMPLETED / WAITING shown in 3 metric columns.
+       On WRONG, a voice alert speaks (rate-limited to once per 3 s).
+    f. Metrics, progress bar, detection banner, per-person position +
+       justification markdown (track id, region, center pixel, reasons),
+       object class-count summary.
+    g. History logging once per second: insert into activity_history
+       (max 200 entries; status Normal for Walking/Standing/Sitting,
+       Review otherwise) and the 5-entry activity stream.
+    h. BGR->RGB conversion, show the frame.
+ 6. On exit: cap.release(), system metric -> OFFLINE.
+
+Screen B — show_task_evaluation():
+ 1. Text area for a free-form task + live parse preview (activities /
+    objects / interaction required) via task_eval.parse_task.
+ 2. Camera source + session init (task_evaluator, verdict, running).
+ 3. Start -> LiveTaskEvaluator(task); Stop -> final verdict.
+ 4. Verdict screen (_show_verdict): score, progress, frames analyzed,
+    status banner (COMPLETED / PARTIAL / NOT), explanation, activity
+    checks with best confidence + justification, object checks
+    (interacted / seen / missing), and a downloadable plain-text report
+    (task_eval.build_report).
+ 5. Live loop: evaluator.step(frame) each frame -> annotated frame +
+    status; voice alerts on wrong activity; metrics (latest activity,
+    elapsed, frames), progress bar, live checklist
+    (_checklist_markdown: confirmed / seen only / waiting), live
+    justification; auto-completes when all requirements confirm.
+ - _checklist_markdown(evaluator): icon + state per requirement.
+ - _show_verdict(verdict, evaluator): full result rendering + report.
+
+Screen C — show_task_verification() (the page used by Live Monitor):
+ - Task-config UI (single or multi-step tasks), task library options
+   (color, order, count, Marked Location set/reset), camera source,
+   Start/Stop/Reset/New Task.
+ - Processes TV_BATCH_FRAMES (~5) frames per Streamlit rerun, keeping
+   the camera in session_state so the device isn't reopened per batch;
+   clicks stay responsive (~1 s latency).
+ - Each frame: analyze_frame + detect_objects + ObjectTracker.update +
+   TaskVerificationSession.process_persons(persons, object_context) —
+   the shared temporal/sequential engine in task_detection.py.
+ - Status rendering in _render_task_status(): current task, step
+   completed flash, IN PROGRESS with live streak counter
+   (streak/required_frames), confidence metric, progress bar, "Why this
+   status?" expander with the real geometric reasons, "What the AI sees"
+   expander listing live tracks (HELD state + lift px), and multi-step
+   TASK PROGRESS list (LOCKED / IN PROGRESS / COMPLETED per step).
+
+============================================================================
+2.3 pose_detection.py — CORE PERSON PIPELINE (pose + position + activity)
+============================================================================
+Model: YOLO("yolo11n-pose.pt"). Keypoints: 17 COCO names
+(nose ... ankles).
+
+Thresholds:
+ - KNEE_STRAIGHT_ANGLE 155 deg (>= = Standing)
+ - KNEE_BENT_ANGLE 125 deg (< = Sitting)
+ - Walking (jitter-proof): movement > 4 px/frame AND net displacement
+   > 25 px AND direction consistency (net/path) >= 0.55, confirmed for
+   4 consecutive frames (hysteresis); exits after 6 failing frames.
+
+Simple tracker (_PersonTrack + _update_tracks):
+ - Each person = body center (hip midpoint, fallback bbox center).
+ - Nearest-center matching within 120 px; unmatched persons get new IDs;
+   unmatched tracks are remembered for 15 frames then dropped.
+ - History deque (12 frames) powers movement metrics:
+   average_movement (px/frame), net_displacement (start->end straight
+   line), total_path, direction consistency = net/path.
+ - update_walking_state(): hysteresis streaks — ENTER requires 4
+   consecutive passing frames, EXIT requires 6 consecutive failures.
+   This blocks the 2-5 px micro-jitter of standing still.
+
+Geometry helpers: _point_valid (missing YOLO point = (0,0)), _angle
+(closed-form angle at joint B of A-B-C), _mid.
+
+_describe_position(bbox, w, h): bbox px, center px, normalized 0-1,
+region string like "middle-center" (3x3 grid of the frame).
+
+_analyze_activity(keypoints, track) -> (activity, confidence, reasons):
+ 1. Needs 17 keypoints, else ("Unknown", 0).
+ 2. Knee angles hip-knee-ankle per side (reasons recorded per leg).
+ 3. Torso tilt from shoulder-center vs hip-center.
+ 4. Movement stats from the track (avg px/frame, net displacement,
+    consistency) — appended to reasons.
+ 5. WALKING first (hysteresis state machine on the track); confidence
+    75 + movement*2 capped 95.
+ 6. SITTING if avg knee angle < 125; STANDING if >= 155; else UNKNOWN
+    ("legs not clearly visible" — no false claims).
+Every decision ships with human-readable justification strings.
+
+Public API:
+ - detect_pose(frame): legacy — (annotated, first person's keypoints).
+ - analyze_frame(frame): full — runs the model, plots skeletons, builds
+   centers, updates tracks, and returns per-person dicts:
+   track_id, position, activity, confidence, justification,
+   keypoints dict, person_confidence; also draws "ID n: ACTIVITY (x%)"
+   labels on the frame.
+ - reset_tracker(): clears tracks between runs.
+ - __main__: standalone webcam demo printing all of the above + FPS.
+
+============================================================================
+2.4 object_detection.py — 80-CLASS OBJECT DETECTION
+============================================================================
+Model: YOLO("yolo11n.pt") — detection (NOT the pose model, which sees
+only persons; this is documented as the fix for "only persons appeared").
+Settings: conf 0.30, IoU 0.45, imgsz 640, classes=None (all 80).
+detect_objects(frame) -> (annotated frame with boxes + "Objects: n"
+summary, detections list of {class_id, class_name, confidence, box}).
+__main__: webcam demo printing every detection.
+
+============================================================================
+2.5 object_tracking.py — OBJECT TRACKS, HOLD/LIFT MEASUREMENT
+============================================================================
+Converts per-frame detections into persistent tracks so movement
+(pick/carry/place) is measurable.
+
+Tuning constants: track history 30 centers, missed > 12 -> delete,
+IoU match >= 0.25, center-dist match < 0.8 * box diagonal (relaxed to
+1.6x for held objects so a fast lift does not re-id), hold enter after
+6 near frames, release after 4 away frames (2-frame release confirm),
+rest baseline reset after 8 quiet frames.
+
+ObjectTrack (per object): box/center/confidence, history deque,
+confidence history (avg_confidence smooths weak-but-persistent
+detections like webcam-angle tables at 0.07-0.11 conf), near_streak per
+hand, held_by {side, person_id}, ever_held, holder_history, container
+membership set, hold_start_center, max_lift, lift_baseline (RETAINED
+across release/re-grip — the fix for the real-life "pick never
+completed" bug).
+
+Movement measurements: net_displacement(window), total_path(window),
+is_stable(frames, max_px), displacement_while_held, lift_px (baseline
+y - current y, positive = up), effective_lift_px (current vs max lift
+until rest reset), carry_displacement (baseline-retained full carry).
+
+Region helpers: inside_box/was_inside_box (with expand), horizontal_
+overlap, near_vertical (object bottom near a surface top — for
+"resting on table").
+
+Hand proximity / hold state machine — update_hand_proximity(persons):
+ - Reach radius = max(0.7 * torso, 0.5 * box diagonal) — scale-free.
+ - WRIST proximity starts a hold; ELBOW proximity only SUSTAINS it
+   (the wrist keypoint often disappears during a real grip).
+ - REST baseline: free + stable + no hand for 8 frames -> baseline =
+   current center, max_lift = 0.
+ - ENTER: best streak >= 6 -> held_by set, hold_start_center, baseline
+   set only if none (mid-air re-grip keeps the old baseline).
+ - SUSTAIN: wrist OR elbow near; both gone for 2 consecutive frames ->
+   RELEASE (baseline retained).
+
+ObjectTracker:
+ - update(detections, persons): skips "person" class (pose pipeline
+   owns persons), matches by IoU/center (relaxed radius for held or
+   nearly-held tracks), creates new tracks otherwise, marks misses,
+   runs hand-proximity on visible tracks, prunes old ones.
+ - Queries: of_class(names, min_conf), any_object(min_conf, min_diag),
+   containers(...).
+ - draw_tracks(frame, tracks, region_box): colors held (yellow) vs
+   free (blue), optional TARGET / PLACE 1 / PLACE 2 region boxes.
+
+============================================================================
+2.6 object_tasks.py — 22 OBJECT-INTERACTION TASK HANDLERS
+============================================================================
+Task library (TASK_LIBRARY): phrase whitelists -> 22 supported task
+keys (pick_bottle, pick_object, place_object_box, remove_object_box,
+move_a_to_b, bottle_on_table, tool_to_container, handoff_person,
+receive_person, place_marked_location, remove_marked_location,
+sort_containers, color_matching, carry_a_to_b, place_multiple_container,
+remove_multiple_container, arrange_order, inspect_object, touch_object,
+point_object, transfer_containers, collect_one_by_one,
+pick_move_workstation, move_bottle_places).
+UNSUPPORTED_TASKS (honest): open/close box (lid state not RGB-visible),
+push/pull (direction person-relative), maintenance procedure
+(domain-specific). Unknown text -> (None, {}) — never a random result.
+
+Parsing — parse_object_task(text):
+ 1. Clean text (lowercase, strip punctuation).
+ 2. Check unsupported phrases first -> key + {"unsupported": True}.
+ 3. Longest whitelisted phrase wins.
+ 4. Extract color (red/blue/green/yellow) and count (2/3/4) details.
+
+Person-context helpers: _kp (named keypoint), _torso (shoulder-hip
+length scale), _hand_near_point (any wrist within 0.55*torso of a
+point), _find_free_hand, _wrist_raised (wrist above shoulder - 0.1*torso
+— inspect gesture), _pointing_pose (shoulder-elbow-wrist angle >= 140
+deg + forearm >= 0.45*torso + arm at/above shoulder level).
+
+evaluate_evidence(context): one evidence snapshot per frame — persons,
+held/free tracks, and container membership with 2-frame temporal
+debounce (inside 2 frames -> container.members.add; outside 2 frames ->
+discard).
+
+Shared detectors: _detect_container (bowl/cup/vase/sink/refrigerator/
+microwave/oven or the user's marked location), _detect_table (dining
+table/bed/couch with smoothed avg_confidence >= 0.08, else marked
+location).
+
+Scoring — _score(context, track, geometry, detected): blend of
+0.4 * person YOLO confidence + 0.25 * object confidence + 0.35 *
+geometry score, clamped to 50-97 when detected; 0 otherwise. No random
+values anywhere.
+
+Handlers (each returns detected, confidence, reasons):
+ - PICKS: h_pick_bottle / h_pick_object — object held AND (lift above
+   min(0.3-0.35 * diag, 60 px cap) OR sustained hold 45 frames).
+ - PLACEMENT: h_place_object_box (object free + stable INSIDE container
+   region; container excluded from self-matching), h_remove_object_box
+   (was inside, now held+out or lifted), h_place_marked_location /
+   h_remove_marked_location, h_bottle_on_table (bottle bottom near the
+   surface top + 40% horizontal overlap + stable), h_tool_to_container,
+   h_pick_move_workstation.
+ - MOVEMENT: h_move_a_to_b / h_carry_a_to_b via _generic_move —
+   displacement >= min_distance * torso (scale-free), measured from
+   carry/baseline/held displacement or recent net displacement.
+ - h_move_bottle_places: staged Place 1 (left third) -> Place 2 (right
+   third) pipeline with 6 stages (in Place 1 -> grip -> carried ->
+   movement -> in Place 2 -> stable + carried >= 25% frame width).
+ - HANDOFF: h_handoff_person (needs 2 persons; giver holds, receiver's
+   hand near, then released + stable -> transfer complete),
+   h_receive_person (same logic).
+ - SORT/COUNT: h_sort_containers (>= 2 occupied containers),
+   h_place_multiple_container / h_remove_multiple_container (member
+   counts), h_collect_one_by_one (distinct ever_held tracks),
+   h_transfer_containers (was in c1, now in c2, stable),
+   h_arrange_order (left-to-right order of chosen objects + stable).
+ - GESTURES ON OBJECTS: h_inspect_object (held + wrist raised),
+   h_touch_object (any hand within 0.3 * torso of an object),
+   h_point_object (pointing pose + object inside the pointing cone:
+   perpendicular distance <= 0.55 * projection).
+ - h_color_matching: object stable inside a container AND its measured
+   color matches the user choice — measured by REAL HSV analysis of
+   the object's ROI (median hue of saturated pixels -> red/green/
+   yellow/blue), cached per track. Honest: COCO has no color labels.
+
+ObjectTaskContext: carries tracker, latest persons/objects, marked
+location [x,y,w,h], chosen color, sorted order, required count,
+container classes, last frame + measure_object_color().
+
+Bridge — check_object_task_step(session, context): returns None for
+pose tasks, else {detected, confidence, reasons, is_object_task} from
+the matching HANDLERS entry; exceptions are caught into honest failure
+reasons. The temporal window + completion logic stays in
+task_detection.py (shared for both paths).
+
+============================================================================
+2.7 task_detection.py — TASK ENGINE (POSE TASKS + STATE MACHINE)
+============================================================================
+Pure math/re/datetime (no cv2) so it is testable without a camera.
+
+Pose-task parsing — parse_task_text(text): word-boundary phrase table
+(sorted longest-first) -> 8 action keys: stand, sit, raise_right_hand,
+raise_left_hand, raise_both_hands, raise_hand (either), walk.
+
+Per-frame detectors (person) -> (detected, geometry score, reasons):
+ - _detect_stand: avg hip-knee-ankle angle >= 150 deg + hip above knee
+   above ankle (vertical order).
+ - _detect_sit: avg knee angle <= 125 deg + hips near knee level
+   (|hip.y - knee.y| < 0.6 * thigh) — seated geometry.
+ - _detect_raise_hand(which): wrist above shoulder by 20% torso margin;
+   variants right / left / both (min ratio) / either (max ratio).
+ - _detect_walk: reuses the pose pipeline's confirmed "Walking"
+   activity (motion tracker) and its confidence + justification.
+ - Confidence blend _geometry_confidence: (70 + 28 * geometry) scaled
+   by YOLO person confidence, clamped 50-98.
+
+evaluate_action(action, persons): best matching person wins; detector
+exceptions are caught into safe failure reasons.
+detect_task(text, persons): one-shot dict for external use.
+
+TaskVerificationSession — the temporal + sequential state machine:
+ - Built from task texts (single or multi). Each step: text, action,
+   unsupported_reason, state (LOCKED / IN PROGRESS / COMPLETED / NOT
+   COMPLETED), confidence, completed_at. Step 1 starts IN PROGRESS,
+   the rest LOCKED (sequential enforcement).
+ - Temporal confirmation: TASK_CONFIRM_FRAMES = 12 matches required
+   within a sliding window of 18 frames (12 + 6 extra). YOLO flicker
+   frames are forgiven by the window; a genuinely absent pose never
+   reaches the count (false-positive safe). Person-absent frames hold
+   the window unchanged.
+ - Object dispatch: if the current step is an object task, calls
+   object_tasks.check_object_task_step (same window/ownership).
+ - On streak >= required: step -> COMPLETED (event recorded with
+   timestamp + confidence), window reset, next step unlocks; after the
+   final step -> all_completed + "All Tasks Completed" event.
+ - process_persons(persons, object_context) returns the full result
+   dict used by the UI (state, streak, required_frames, reasons,
+   events, progress).
+ - reset(): back to step 1 IN PROGRESS.
+ - verify_single_task / verify_task_step: convenience wrappers.
+
+============================================================================
+2.8 step_validator.py — FIXED SEQUENCE VALIDATOR
+============================================================================
+STEP_SEQUENCE = [Standing, Walking, Sitting]. StepValidator.
+check_activity(activity) -> CORRECT (advance) / WRONG (voice alert in
+camera.py) / COMPLETED / NEUTRAL (Unknown pose -> no verdict).
+get_current_step / reset / get_progress support the UI. Used by the
+activity-monitor screen's "Sequential Step Evaluation" panel.
+
+============================================================================
+2.9 task_eval.py — LIVE TASK EVALUATION ENGINE
+============================================================================
+A lighter, goal-oriented engine (used by the Task Evaluation screen).
+
+parse_task(text) -> requirements:
+ - ACTIVITY_KEYWORDS: Walking/Sitting/Standing phrases (longest first,
+   word-boundary matched, consumed from the text).
+ - TASK_OBJECT_WORDS: ~25 everyday objects mapped to COCO classes
+   (bottle, cup, chair, dining table, book, laptop, cell phone...).
+ - INTERACTION_VERBS (pick up, grab, hold, place...) ->
+   interaction_required. mentions_person flag.
+
+LiveTaskEvaluator: step(frame) per frame:
+ 1. analyze_frame + detect_objects.
+ 2. Activity evidence: best confidence + justification per activity.
+ 3. 10-second wrong-activity timer: if the current activity is not one
+    of the required ones for >= 10 s, a voice alert is queued
+    (get_voice_alert() -> camera.py speaks it once).
+ 4. Object evidence: best confidence per class; proximity check
+    _object_near_person — object center inside the person bbox expanded
+    by 60% of person height = "interacted".
+ 5. Auto-complete when all requirements confirm.
+States: activity confirmed (>= 60 conf) / seen / missing; object
+interacted / seen / missing.
+evaluate(): score = mean of part scores (confirmed=100, seen=55/60);
+>= 85 COMPLETED, >= 55 PARTIAL, else NOT COMPLETED (unclear task ->
+NEEDS REVIEW with a helpful message). Verdict includes per-requirement
+checks, stats, explanation. progress() 0-1 for the UI bar.
+build_report(evaluator): plain-text report (downloadable).
+__main__: console demo (v = verdict, q = quit).
+
+============================================================================
+2.10 live_pose_detection.py — STANDALONE POSE DEMO
+============================================================================
+Minimal script: YOLO11n-pose on webcam index 0, prints every keypoint
+coordinate per person per frame, FPS overlay, 'q' to quit. Educational /
+debug entry point without any UI.
+
+============================================================================
+2.11 activity_detection.py — LEGACY ACTIVITY LOGIC
+============================================================================
+The original single-person activity classifier: knee angles
+(<125 Sitting, >=155 Standing), simple motion-history Walking
+(avg movement > 3 px/frame), Unknown otherwise. Kept for reference;
+superseded by the jitter-proof, tracked, justified logic inside
+pose_detection.py.
+
+============================================================================
+2.12 desktop_app.py — OFFLINE DESKTOP LAUNCHER
+============================================================================
+1. find_free_port(): prefers 8765, else an OS-assigned free port.
+2. start_streamlit(port): subprocess `python -m streamlit run app.py`
+   (headless, localhost only, usage stats off, no window on Windows
+   via CREATE_NO_WINDOW). Frozen mode instead relaunches the .exe with
+   --frozen-streamlit --port N (two modes of the same exe).
+3. wait_for_server(): polls http://127.0.0.1:PORT/_stcore/health up to
+   90 s.
+4. pywebview native window (1500x920, dark background) pointed at the
+   server; falls back to the default browser if WebView2 is missing.
+5. Window closed -> server terminated. Path handling supports running
+   from source and from a PyInstaller bundle (sys._MEIPASS, os.chdir).
+
+============================================================================
+2.13 build_exe.py — PYINSTALLER PACKAGING
+============================================================================
+Builds dist/BAS-AI.exe (--onefile default) or dist/BAS-AI/ (--onedir):
+ - add-data: Streamlit frontend, pywebview assets, both YOLO models
+   (yolo11n-pose.pt, yolo11n.pt).
+ - hidden imports: streamlit web cli/bootstrap, pywebview winforms/
+   edgechromium/cef, clr_loader/pythonnet, pyttsx3 sapi5 drivers,
+   win32com, ultralytics internals, altair/pandas/pyarrow/PIL.
+ - excludes: tkinter, matplotlib, IPython, notebook, jupyter, pytest.
+ - Prints the output path + size; onefile needs 30-60 s first-launch
+   unpack time.
+
+============================================================================
+2.14 TESTS AND LIVE UTILITIES
+============================================================================
+ - test_object_tasks.py: camera-free simulation suite (12 tests + bonus)
+   using synthetic detections/persons: parsing (supported/unsupported/
+   unknown/color+count), tracker stability & identity, hold->lift->
+   release hysteresis, full pick_bottle completion, place_object_box
+   with the empty-bowl regression, handoff with 1 vs 2 persons,
+   unsupported never completes, sequential pick->place order
+   enforcement, bottle_on_table (on vs mid-air), mid-air re-grip lift
+   retention, the 5 user demo tasks, and the staged move_bottle_places.
+   Exit code 1 if anything fails.
+ - test_task_verification.py / test_walking_fix.py: same simulation
+   pattern for pose tasks and the jitter-proof walking detector
+   (random jitter/drift simulation).
+ - live_retest.py: real-camera end-to-end check of the pick pipeline
+   with 1-second telemetry (persons, objects, held + lift px, streak).
+ - live_task_suite.py: scripted real-camera run of 7 object tasks
+   (30 s each, confirm at 6 frames) printing PASS/FAIL + summary.
+
+============================================================================
+2.15 SUPPORT FILES
+============================================================================
+ - requirements.txt: streamlit, opencv-python, ultralytics, numpy,
+   pyttsx3.
+ - LIBRARIES.txt: full library reference (versions, roles, pipeline
+   diagram, install steps).
+ - README.md: feature overview, API examples, setup, dashboard pages,
+   activity-logic thresholds, desktop .exe instructions.
+ - BAS-AI.spec: PyInstaller spec generated by build_exe.py.
+ - yolo11n-pose.pt: bundled pose model; yolo11n.pt: detection model
+   (auto-downloaded by ultralytics on first run if absent).
+ - PROGRESS_OBJECT_TASKS.md / TASK_LIST.txt: task progress notes.
+ - *.log: runtime logs (app_run, streamlit logs).
+
+--------------------------------------------------------------------------------
+3. END-TO-END EXAMPLE — "PICK UP THE BOTTLE AND PLACE IT INSIDE A BOX"
+--------------------------------------------------------------------------------
+ 1. User types the task in Live Monitor -> parse: pose parser misses it,
+    object parser matches "place_object_box" (longest-phrase rule).
+ 2. _texts_need_objects -> True -> object UI options + ObjectTracker +
+    ObjectTaskContext created; camera opens.
+ 3. Each batch (5 frames): analyze_frame finds the person (17 keypoints,
+    track ID, activity with justification); detect_objects finds
+    bottle/box; ObjectTracker matches detections into persistent tracks
+    and runs hand-proximity hold detection.
+ 4. The user reaches out: wrist enters reach (max(0.7*torso,
+    0.5*box diag)) for 6 frames -> track HELD; lift baseline captured.
+ 5. The user lifts: lift_px grows; handler h_pick_* style evidence and
+    the session window accumulate matches (12 in 18 frames completes a
+    step; "pick" evidence also flows through the same session).
+ 6. The user carries: carry_displacement measured from the retained
+    baseline (survives wrist flicker / re-grip).
+ 7. The user places the bottle inside the box and lets go: 2-frame
+    release confirm -> free track; the box container sees the bottle
+    inside for 2 frames -> container membership; the object is stable
+    4 frames -> place evidence confirmed.
+ 8. TaskVerificationSession marks the step COMPLETED (event with
+    timestamp + confidence), the UI flashes the green completion,
+    progress advances, and task_history stores the record for the
+    Activity History page.
+
+--------------------------------------------------------------------------------
+4. KEY DESIGN PRINCIPLES OBSERVED IN THE CODE
+--------------------------------------------------------------------------------
+ 1. REAL SENSORS ONLY — every confidence blends real YOLO confidences
+    and geometry; no random/dummy values anywhere in the pipeline.
+ 2. HONESTY OVER FALSE POSITIVES — unknown/unsupported tasks are
+    rejected with explicit reasons instead of guessed results.
+ 3. TEMPORAL CONFIRMATION EVERYWHERE — walking (4/6-frame hysteresis),
+    task steps (12-of-18 sliding window), holds (6-frame enter /
+    2-frame release), container membership (2-frame debounce).
+ 4. SCALE INVARIANCE — thresholds are expressed in torso lengths and
+    box diagonals so they work at any camera distance.
+ 5. JUSTIFICATION WITH EVERY DECISION — each activity/task verdict
+    carries human-readable reasons (knee angles, displacement,
+    consistency, lift px) shown live in the UI.
+ 6. GRACEFUL DEGRADATION — missing keypoints, absent persons, camera
+    failures, and detector exceptions all produce safe, honest states
+    instead of crashes.
+ 7. OFFLINE FIRST — YOLO inference, TTS voice alerts, and the dashboard
+    all run without internet; the .exe bundles both models.
+
+================================================================================
+ END OF DOCUMENT
+================================================================================
