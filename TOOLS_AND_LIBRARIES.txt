@@ -1,0 +1,266 @@
+================================================================================
+ BAS-AI | AI RECOGNITION SYSTEM
+ AI TOOLS & PYTHON LIBRARIES USED
+================================================================================
+Generated : 26 September 2026
+Project   : AI-RECOGNITION-SYSTEM (BAS-AI, Smart India Hackathon 2026)
+Purpose   : Complete reference of every AI tool and library the program uses,
+            what each one does, and where it is used in the code.
+
+--------------------------------------------------------------------------------
+1. AI / DEEP LEARNING TOOLS
+--------------------------------------------------------------------------------
+
+1.1 ULTRALYTICS YOLO11 — POSE MODEL
+----------------------------------------
+Model file   : yolo11n-pose.pt (~6 MB, bundled in the repo)
+Used in      : pose_detection.py, live_pose_detection.py
+What it does : Detects PERSONS and returns 17 COCO body keypoints per
+               person (nose, eyes, ears, shoulders, elbows, wrists,
+               hips, knees, ankles) with bounding boxes and confidence.
+
+Role in BAS-AI:
+  - The foundation of activity recognition
+  - Keypoints feed the knee-angle logic (Standing / Sitting)
+  - Hip-center movement feeds the jitter-proof Walking detector
+  - Wrist/elbow keypoints drive object hold detection (pick tasks)
+
+1.2 ULTRALYTICS YOLO11 — DETECTION MODEL
+----------------------------------------
+Model file   : yolo11n.pt (auto-downloaded by ultralytics on first run)
+Used in      : object_detection.py (via camera.py, task_eval.py)
+What it does : Detects ALL 80 COCO classes (person, bottle, cup, bowl,
+               dining table, cell phone, book, laptop, scissors...).
+
+Role in BAS-AI:
+  - Object-interaction tasks (pick up bottle, place in box,
+    bottle on table, move bottle Place 1 -> Place 2...)
+  - Person-object proximity checks (interaction evidence)
+  - Container membership (is the object inside the box/bowl?)
+
+1.3 PYTORCH (torch + torchvision) — AUTOMATIC DEPENDENCY
+----------------------------------------
+Installed    : Automatically with ultralytics (torch 2.14.0,
+               torchvision 0.29.0)
+Used in      : Not imported directly — it is the deep-learning backend
+               that every YOLO inference runs on.
+
+1.4 CUSTOM AI LOGIC (HAND-WRITTEN — NO LIBRARY)
+----------------------------------------
+Files        : pose_detection.py, task_detection.py, object_tracking.py,
+               object_tasks.py, task_eval.py, step_validator.py
+What it does : The transparent decision layer on top of YOLO output.
+
+Highlights:
+  - Knee-angle classification   : hip-knee-ankle angles (<125 deg = Sitting,
+                                  >=155 deg = Standing)
+  - Jitter-proof Walking        : movement > 4 px/frame AND net
+                                  displacement > 25 px AND direction
+                                  consistency >= 0.55 + 4-frame hysteresis
+  - Temporal confirmation       : 12-of-18 sliding window before any task
+                                  step completes (blocks flicker false
+                                  positives)
+  - Hold detection state machine: wrist within max(0.7 x torso,
+                                  0.5 x box diag) for 6 frames -> HELD;
+                                  lift baseline retained across re-grip
+  - Scale-free geometry         : thresholds in torso lengths / box
+                                  diagonals so they work at any camera
+                                  distance
+  - HSV color measurement       : real median-hue measurement of the
+                                  object ROI for color-matching tasks
+  - Confidence blending         : 0.4 x person conf + 0.25 x object conf
+                                  + 0.35 x geometry score (no random values)
+
+--------------------------------------------------------------------------------
+2. PYTHON LIBRARIES (requirements.txt)
+--------------------------------------------------------------------------------
+
+2.1 STREAMLIT  (installed: 1.63.0)
+----------------------------------------
+Used in : app.py (dashboard pages), camera.py (live screens)
+Role    : The entire user interface.
+
+Features used:
+  - st.set_page_config + custom CSS (dark space theme)
+  - Sidebar navigation (st.radio), 4 pages
+  - Live widgets: buttons, radio, text area, number input, expander
+  - Real-time metrics: st.metric, st.progress, st.empty() placeholders
+  - st.dataframe (history tables), st.bar_chart (analytics)
+  - st.session_state (camera state, trackers, history survive reruns)
+  - st.download_button (task evaluation report)
+
+2.2 OPENCV  (opencv-python, installed: 5.0.0.93)
+----------------------------------------
+Used in : camera.py, pose_detection.py, object_detection.py,
+          object_tracking.py, object_tasks.py (color), task_eval.py,
+          live demos / test utilities
+Role    : Camera input, video streams, frame-level image processing.
+
+Features used:
+  - cv2.VideoCapture(0)            : laptop webcam
+  - cv2.VideoCapture(url)          : mobile IP camera over Wi-Fi
+                                     (IP Webcam / DroidCam)
+  - cap.read()                     : per-frame grab
+  - cv2.cvtColor(BGR2RGB / BGR2HSV): display conversion + color
+                                     measurement
+  - cv2.rectangle / cv2.putText    : boxes + labels on frames
+  - cv2.imshow                     : standalone demo windows
+  - CAP_DSHOW backend              : fast/reliable Windows camera open
+
+2.3 ULTRALYTICS  (installed: 8.4.149)
+----------------------------------------
+Used in : pose_detection.py, object_detection.py, live_pose_detection.py
+Role    : The AI engine — loads the YOLO models and runs inference.
+
+Features used:
+  - model(frame, verbose=False)     : single-frame inference
+  - results[0].keypoints.xy         : keypoint (x, y) tensors
+  - results[0].boxes                : boxes + confidences + classes
+  - results[0].plot()               : auto-annotated frames
+  - model.predict(conf, iou, imgsz) : tuned detection
+
+2.4 NUMPY  (installed: 2.5.3)
+----------------------------------------
+Used in : pose_detection.py (keypoint arrays), and indirectly under
+          OpenCV / PyTorch / pandas everywhere
+Role    : Numerical foundation — keypoint coordinate arrays and the
+          distance/geometry math built on them.
+
+2.5 PYTTSX3  (installed: 2.99)
+----------------------------------------
+Used in : camera.py (speak_alert, show_camera voice alerts)
+Role    : Fully OFFLINE text-to-speech — speaks warnings when the user
+          performs the wrong activity (10-second rule in task_eval.py,
+          3-second rate limit in show_camera).
+
+Features used:
+  - pyttsx3.init(), engine.setProperty("rate", 150)
+  - engine.say() + engine.runAndWait()
+  - threading.Thread (daemon) so speech never blocks the video loop
+
+--------------------------------------------------------------------------------
+3. DESKTOP / PACKAGING LIBRARIES (OPTIONAL)
+--------------------------------------------------------------------------------
+
+3.1 PYWEBVIEW
+----------------------------------------
+Used in : desktop_app.py
+Role    : Opens the Streamlit dashboard inside a NATIVE Windows window
+          (no browser). Falls back to the default browser if the
+          WebView2 runtime is missing.
+
+3.2 PYINSTALLER
+----------------------------------------
+Used in : build_exe.py (via `python build_exe.py`)
+Role    : Builds the standalone offline BAS-AI.exe.
+Bundled : All source modules, both YOLO models, the Streamlit runtime +
+          static assets, pywebview + WebView2 loader, pyttsx3 drivers.
+Modes   : --onefile (default, dist/BAS-AI.exe) or --onedir
+          (dist/BAS-AI/, faster startup).
+
+--------------------------------------------------------------------------------
+4. PYTHON STANDARD LIBRARY (NO INSTALL NEEDED)
+--------------------------------------------------------------------------------
+
+  Module        Used in                                Purpose
+  ------------  -------------------------------------- ----------------------------
+  math          pose_detection, activity_detection,    Knee angles (acos/degrees),
+                object_tracking, object_tasks,          distances (hypot), torso
+                task_detection                          scaling
+  collections   pose_detection, activity_detection,    deque rolling buffers:
+  .deque        object_tracking, task_detection         motion history (walking),
+                                                        track history, sliding
+                                                        windows
+  re            task_detection, task_eval              Word-boundary parsing of
+                                                        natural-language task text
+                                                        ("sit" must not match
+                                                        "visit")
+  datetime      app.py, camera.py, task_detection      Date/time stamps for history
+                                                        tables and task events
+  time          camera.py, task_eval, live utilities   1-second logging interval,
+                                                        10-second wrong-activity
+                                                        timer, elapsed stats
+  threading     camera.py                              Background thread for voice
+                                                        alerts (non-blocking video)
+  os / sys      test files, live utilities,            Path setup; frozen-.exe path
+                desktop_app.py                         handling
+  random        test_walking_fix.py                    Simulated jitter/drift for
+                                                        regression tests (tests only)
+  subprocess    desktop_app.py, build_exe.py           Start/stop the Streamlit
+                                                        server; run PyInstaller
+  socket        desktop_app.py                         Free-port picking +
+                                                        single-instance detection
+  urllib        desktop_app.py                         Server health check
+                                                        (/_stcore/health)
+
+--------------------------------------------------------------------------------
+5. HOW THEY WORK TOGETHER (SUMMARY PIPELINE)
+--------------------------------------------------------------------------------
+
+  Webcam / Mobile IP camera
+        |
+   [OpenCV]  cap.read() -> raw frame
+        |
+   +----+--------------------+
+   |                         |
+[YOLO11 pose]          [YOLO11 detection]
+ 17 keypoints           80-class objects
+   |                         |
+[keypoint math]       [ObjectTracker]
+ activity +           hold / lift / carry
+ justification        measurement
+   |                         |
+   +--------+----------------+
+            |
+  [task engines: task_detection + object_tasks + task_eval
+   + step_validator  (pure math/re/deque logic)]
+            |
+   +--------+------------------+
+   |                           |
+[Streamlit UI]           [pyttsx3 voice]
+ dashboard, metrics,     wrong-activity
+ charts, history         warnings
+
+  Everything runs 100% OFFLINE: YOLO inference, voice alerts,
+  and the dashboard (localhost server). No internet or API keys needed.
+
+--------------------------------------------------------------------------------
+6. QUICK INSTALL
+--------------------------------------------------------------------------------
+
+  # Core (from requirements.txt)
+  pip install -r requirements.txt
+
+  # Optional desktop app
+  pip install pywebview pyinstaller
+
+  # Run (web dashboard)
+  streamlit run app.py
+
+  # Run (native desktop window)
+  python desktop_app.py
+
+  # Build standalone .exe
+  python build_exe.py
+
+--------------------------------------------------------------------------------
+7. VERSION SUMMARY
+--------------------------------------------------------------------------------
+
+  Package          Version       Purpose
+  ---------------  ------------  --------------------------------------
+  streamlit        1.63.0        Web dashboard
+  opencv-python    5.0.0.93      Camera + image processing
+  ultralytics      8.4.149       YOLO11 inference (pose + detection)
+  numpy            2.5.3         Numeric arrays
+  pyttsx3          2.99          Offline voice alerts
+  torch            2.14.0        DL backend (auto, not imported)
+  torchvision      0.29.0        DL backend (auto, not imported)
+  pywebview        (optional)    Native desktop window
+  pyinstaller      (optional)    .exe packaging
+
+  AI model files: yolo11n-pose.pt (bundled), yolo11n.pt (auto-download)
+
+================================================================================
+ END OF DOCUMENT
+================================================================================
