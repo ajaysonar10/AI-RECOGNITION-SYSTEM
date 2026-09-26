@@ -1,0 +1,10 @@
+flowchart TD
+    M(["BAS-AI.exe / desktop_app.py"]) --> FP["Find free port<br/>(prefer 8765)"]
+    FP --> SV["Start Streamlit server<br/>(headless, localhost)"]
+    SV --> HL{"Health check<br/>within 90 s?"}
+    HL -- "Yes" --> WV{"WebView2<br/>available?"}
+    WV -- "Yes" --> NW["🖥️ Native window<br/>(pywebview 1500×920)"]
+    WV -- "No" --> BR["🌐 Default browser fallback"]
+    HL -- "No" --> BR
+    NW --> CL["Window closed →<br/>stop server"]
+    BR --> CL

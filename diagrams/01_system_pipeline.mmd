@@ -1,0 +1,17 @@
+flowchart TD
+    A["📷 Camera Source<br/>(Laptop webcam or Mobile IP cam)"] --> B["cv2.VideoCapture<br/>frame read"]
+    B --> C["🧍 pose_detection.analyze_frame()<br/>YOLO11n-pose → 17 keypoints"]
+    B --> D["📦 object_detection.detect_objects()<br/>YOLO11n → 80 COCO classes"]
+    C --> E["Person Tracker<br/>nearest-center matching → Track ID"]
+    E --> F["Activity + Justification<br/>(Standing / Sitting / Walking / Unknown)"]
+    D --> G["ObjectTracker<br/>persistent tracks + hold/lift state"]
+    F --> H["Task Layer"]
+    G --> H
+    H --> I["StepValidator<br/>fixed sequence"]
+    H --> J["TaskVerificationSession<br/>pose + object tasks"]
+    H --> K["LiveTaskEvaluator<br/>free-text tasks"]
+    I --> L["🖥️ Streamlit UI<br/>metrics · checklists · history · analytics"]
+    J --> L
+    K --> L
+    F --> M["🔊 pyttsx3 Voice Alert<br/>(wrong activity)"]
+    L --> N["BGR → RGB<br/>annotated frame display"]

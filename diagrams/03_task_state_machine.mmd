@@ -1,0 +1,18 @@
+flowchart TD
+    T(["Task text entered"]) --> P{"Parse text"}
+    P -- "pose phrase" --> PD["Pose detector<br/>(stand / sit / raise hand / walk)"]
+    P -- "object phrase" --> OD["Object handler<br/>(pick / place / handoff / 22 tasks)"]
+    P -- "unknown / unsupported" --> REJ["🚫 Honest rejection<br/>never a fake result"]
+    PD --> E{"Pose/object matched<br/>this frame?"}
+    OD --> E
+    E -- "Yes" --> INC["streak +1<br/>(window of 18 frames)"]
+    E -- "No" --> HOLD["window unchanged<br/>(flicker-tolerant)"]
+    INC --> Q{"streak ≥ 12<br/>confirmations?"}
+    HOLD --> Q
+    Q -- "No" --> LOOP["Continue camera loop"]
+    Q -- "Yes" --> DONE["✅ Step COMPLETED<br/>event + timestamp + confidence"]
+    DONE --> MORE{"More steps?"}
+    MORE -- "Yes" --> NEXT["Next step unlocks<br/>(sequential enforcement)"] --> LOOP
+    MORE -- "No" --> ALL["🎉 ALL TASKS COMPLETED<br/>→ task history"]
+    REJ --> UI
+    LOOP --> UI["🖥️ Live UI status<br/>streak · confidence · reasons"]

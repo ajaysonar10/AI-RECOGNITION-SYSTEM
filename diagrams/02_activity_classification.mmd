@@ -1,0 +1,14 @@
+flowchart TD
+    S(["Person detected"]) --> K{"17 keypoints<br/>available?"}
+    K -- "No" --> U["❓ Unknown (0%)"]
+    K -- "Yes" --> W{"Walking test passes?<br/>movement > 4 px/frame<br/>AND net displacement > 25 px<br/>AND consistency ≥ 0.55<br/>AND 4-frame streak"}
+    W -- "Yes" --> WK["🚶 Walking<br/>(conf 75–95%)"]
+    W -- "No" --> KA{"Avg knee angle?"}
+    KA -- "< 125°" --> SIT["🪑 Sitting<br/>(knees bent)"]
+    KA -- "≥ 155°" --> ST["🧍 Standing<br/>(legs straight)"]
+    KA -- "125°–155°" --> U2["❓ Unknown<br/>(pose not clear)"]
+    WK --> R["Return activity<br/>+ confidence + reasons"]
+    SIT --> R
+    ST --> R
+    U2 --> R
+    U --> R

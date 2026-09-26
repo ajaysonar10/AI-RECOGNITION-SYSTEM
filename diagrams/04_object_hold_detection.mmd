@@ -1,0 +1,12 @@
+flowchart TD
+    O(["Object track alive"]) --> P{"Wrist inside reach?<br/>max(0.7 × torso, 0.5 × box diag)"}
+    P -- "Yes, 6 frames" --> H["✋ HELD<br/>lift baseline captured"]
+    P -- "No" --> F["Free object"]
+    H --> S{"Wrist OR elbow<br/>still near?"}
+    S -- "Yes" --> L["Track lift<br/>max_lift updated"]
+    S -- "No, 2 frames" --> REL["Released<br/>(baseline RETAINED<br/>for re-grip)"]
+    F --> REST{"Free + stable +<br/>no hand 8 frames?"}
+    REST -- "Yes" --> RB["Reset baseline<br/>(object at rest)"]
+    REST -- "No" --> F
+    L --> S
+    REL --> P
