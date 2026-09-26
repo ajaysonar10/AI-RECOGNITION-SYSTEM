@@ -1,0 +1,347 @@
+================================================================================
+ BAS-AI | AI RECOGNITION SYSTEM
+ REAL-TIME PROBLEM ANALYSIS (vs. PROBLEM STATEMENT) + SOLUTIONS
+================================================================================
+Generated : 26 September 2026
+Project   : AI-RECOGNITION-SYSTEM (BAS-AI, Smart India Hackathon 2026)
+Reference : BAS / lunar on-board HAR problem statement (SIH 2026)
+
+--------------------------------------------------------------------------------
+0. PROBLEM STATEMENT — WHAT IS ASKED (SUMMARY)
+--------------------------------------------------------------------------------
+For space missions (BAS, lunar), real-time ground support is impossible due
+to communication delays. An on-board AI-based Human Activity Recognition
+(HAR) system must act as a mission-critical assistant that:
+
+  R1. Continuously processes LOCAL video feeds (fixed-payload cameras)
+      and tracks the SEQUENCE of a pre-defined experiment (edge AI).
+  R2. At the start or after each step, SUGGESTS THE NEXT STEP.
+  R3. ALERTS (VOICE) when a step is SKIPPED or an OUT-OF-SEQUENCE step
+      is performed.
+  R4. Generates a TIMESTAMPED, STRUCTURED, LIGHTWEIGHT TEXT FILE of the
+      conducted steps with outcomes/status.
+  R5. STREAMS the experiment video to a specific IP AND stores the video
+      locally.
+  R6. Provides a GUI to monitor all of the above.
+  R7. Deliverable: a TRAINED AI MODEL (dataset generation for object
+      detection, pose estimation, hand-object interaction) that runs on
+      an OFFLINE STANDALONE system.
+  R8. (Optional) Orientation-agnostic 3D Human Mesh Recovery (HMR):
+      ground-based 2D/3D posture models fail because astronauts have no
+      fixed 'up/down'; the body must be tracked relative to the payload
+      rack, not the floor.
+
+--------------------------------------------------------------------------------
+1. WHAT BAS-AI ALREADY COVERS (GAP MAP)
+--------------------------------------------------------------------------------
+
+  Requirement | Status | Where in the codebase
+  ----------- | ------ | -----------------------------------------------------
+  R1 Edge AI  |  PARTIAL | Two YOLO11 models run locally (pose_detection.py,
+   local video        object_detection.py); no cloud calls. Fixed-camera
+                      concept supported, but only webcam/mobile sources.
+  R2 Next-step|  PARTIAL | Multi-step mode shows the CURRENT step
+   suggestion         (TaskVerificationSession in task_detection.py), but
+                      there is no proactive "next step" announcement
+                      (voice/on-screen) when a step completes or at start.
+  R3 Voice    |  PARTIAL | pyttsx3 voice alerts exist for WRONG ACTIVITY
+   alerts             (camera.py speak_alert + 10-s timer in task_eval.py),
+                      but NOT for skipped/out-of-sequence steps in the task
+                      verification screen.
+  R4 Text     |  MISSING | History is kept only in st.session_state (RAM,
+   file report        max 200 rows, lost on restart). No structured file
+                      is written to disk.
+  R5 Video    |  MISSING | Video is displayed in the dashboard only — no
+   stream + store     MJPEG/IP streaming and no local recording
+                      (no cv2.VideoWriter).
+  R6 GUI      |     YES  | Streamlit dashboard (app.py) + native desktop
+                      window (desktop_app.py).
+  R7 Trained  |  PARTIAL | Uses pre-trained COCO models. No custom dataset,
+   model              no fine-tuning on experiment-specific objects/steps.
+                      Offline standalone .exe exists (build_exe.py).
+  R8 3D /     |  MISSING | YOLO11-pose is 2D and implicitly assumes an
+   orientation-       upright, gravity-aligned body (knee-angle logic,
+   agnostic HMR       hip>knee>ankle vertical ordering). Fails in
+                      microgravity.
+
+--------------------------------------------------------------------------------
+2. REAL-TIME PROBLEMS IN THE CURRENT PROGRAM (DETAILED)
+--------------------------------------------------------------------------------
+
+  P1. NO PERSISTENT, STRUCTURED STEP REPORT (violates R4)
+  ------------------------------------------------------------
+  All detections/task events live in st.session_state. If the app or the
+  PC restarts mid-experiment, the entire record of "which step was done,
+  when, with what confidence" is lost. Mission-critical audits need a
+  durable, timestamped, lightweight file per experiment run.
+
+  P2. NO SKIP / OUT-OF-SEQUENCE VOICE ALERT (violates R3)
+  ------------------------------------------------------------
+  The sequential engine (task_detection.py) silently refuses to unlock
+  step N+1 while step N is pending — the astronaut gets no immediate
+  voice warning that they SKIPPED a step or performed a WRONG step in
+  the verification screen. The existing voice path (speak_alert) is only
+  wired to the activity monitor and the 10-second wrong-activity timer.
+
+  P3. NO NEXT-STEP SUGGESTION (violates R2)
+  ------------------------------------------------------------
+  After a step completes, the UI updates the state machine, but nobody
+  TELLS the astronaut what to do next. In a hands-busy lab scenario the
+  crew cannot keep looking at a screen — the suggestion must be spoken
+  and shown prominently at start and after every step.
+
+  P4. NO VIDEO STREAMING TO A SPECIFIC IP (violates R5a)
+  ------------------------------------------------------------
+  The annotated feed is rendered inside Streamlit only. Mission control
+  (or a second console on the same LAN) cannot subscribe to the live
+  video. No MJPEG/RTSP server is running.
+
+  P5. NO LOCAL VIDEO STORAGE (violates R5b)
+  ------------------------------------------------------------
+  Nothing is recorded. For post-experiment review, debugging AI
+  decisions, and incident analysis, the experiment video (raw and/or
+  annotated) must be written to disk (mp4/avi) with the run metadata.
+
+  P6. 2D GRAVITY-ASSUMING POSE FAILS IN MICROGRAVITY (violates R8)
+  ------------------------------------------------------------
+  pose_detection.py and task_detection.py decide Standing/Sitting from
+  knee ANGLES plus vertical ordering (hip.y < knee.y < ankle.y). In
+  orbit an astronaut may be upside-down or sideways relative to the
+  camera, so:
+    - the "hip above knee above ankle" test breaks,
+    - image-frame 'up' has no meaning,
+    - activity labels become unreliable.
+  The optional problem statement explicitly calls this out and asks for
+  orientation-agnostic 3D HMR (body relative to the payload rack).
+
+  P7. MODELS ARE GENERIC COCO — NOT TRAINED ON THE EXPERIMENT (R7)
+  ------------------------------------------------------------
+  yolo11n-pose.pt / yolo11n.pt know COCO classes only. Experiment-
+  specific items (payload rack, sample containers, BAS tools, gloves)
+  and experiment-specific steps/hand-object interactions are not in the
+  label space, so the AI cannot see half of the experiment. No custom
+  dataset exists.
+
+  P8. REAL-TIME PERFORMANCE ON EDGE HARDWARE
+  ------------------------------------------------------------
+  Two YOLO inference passes per frame (pose + objects) at imgsz=640 on
+  CPU give roughly 5-12 FPS on a typical laptop CPU — borderline for
+  "real time" on the low-power fanless boxes likely used on-board. The
+  Streamlit batching (TV_BATCH_FRAMES=5) also adds up to ~1 s input
+  latency. Full PyTorch is a heavy runtime for a standalone space-grade
+  machine.
+
+  P9. SINGLE FIXED CAMERA — OCCLUSION AND VIEWPOINT LIMITS
+  ------------------------------------------------------------
+  One RGB camera cannot see occluded grips (wrist keypoint flickers when
+  the hand closes — already patched with an elbow-sustain fallback),
+  cannot verify depth (a 'place in box' can be faked by the object
+  passing in front), and handoff/2-person tasks depend on both persons
+  being visible. Lighting changes also shift HSV color measurements.
+
+  P10. ROBUSTNESS / RUN-LENGTH LIMITS
+  ------------------------------------------------------------
+  - activity_history caps at 200 rows; long experiments overflow.
+  - Person/object trackers assume near-fixed camera; if the payload
+    camera is bumped, all tracks re-id.
+  - No experiment session resume: a crash loses the step sequence state.
+
+--------------------------------------------------------------------------------
+3. SOLUTIONS (CONCRETE, MAPPED TO THE CODEBASE)
+--------------------------------------------------------------------------------
+
+  S1. PERSISTENT STRUCTURED REPORT (solves P1, R4)
+  ------------------------------------------------------------
+  Add a small ExperimentLog class (new file experiment_log.py):
+    - One JSON-Lines file per run: logs/experiment_<datetime>.jsonl
+      each line: {"ts":"2026-09-26T14:03:11","step_no":2,
+                  "step":"pick_bottle","status":"COMPLETED",
+                  "confidence":91.4,"duration_s":18.2}
+    - Also write a human-readable .txt summary at run end
+      (reuse task_eval.build_report() formatting).
+    - Hook points (2 lines each):
+        * task_detection.TaskVerificationSession.process_persons()
+          -> after step completion, call log.step_completed(event)
+        * camera.py show_task_verification() loop -> log.frame_status()
+    - Optional auto-download button in the UI (st.download_button).
+
+  S2. SKIP / OUT-OF-SEQUENCE VOICE ALERT (solves P2, R3)
+  ------------------------------------------------------------
+  Extend TaskVerificationSession.process_persons() result dict with
+    "violation": None | "SKIPPED_STEP" | "OUT_OF_SEQUENCE"
+    "violation_message": "Step 3 skipped — perform Step 2 first"
+  Detection logic:
+    - The engine already knows which objects are held (ObjectTracker
+      hold state) and which action the current step expects.
+    - If the astronaut clearly performs a LATER step's signature
+      (e.g., places the bottle in the box while step 'pick' is still
+      pending) for > CONFIRM frames, emit OUT_OF_SEQUENCE.
+    - If a step stays pending while evidence for a later step fires,
+      emit SKIPPED_STEP.
+  Wire to voice in camera.py:
+    if result["violation"] and now - last_voice_time >= 5:
+        speak_alert(result["violation_message"])
+  (pyttsx3 is already offline — no new dependency.)
+
+  S3. NEXT-STEP SUGGESTION (solves P3, R2)
+  ------------------------------------------------------------
+  - On session start and right after every step completion, build the
+    message: "Step 2 complete. Next: pick up the bottle."
+  - Show it in a prominent st.success banner + speak it once
+    (speak_alert). Reuse ACTION_LABELS / TASK_LABELS for wording.
+  - Add an optional "Preview protocol" in the task-config UI listing
+    all steps in order (steps_view() already provides the data).
+
+  S4. MJPEG STREAM TO A SPECIFIC IP (solves P4, R5a)
+  ------------------------------------------------------------
+  Lightweight approach with NO new heavy dependency:
+    - New file stream_server.py: a threading.HTTPServer that serves
+      the latest annotated JPEG at /stream.mjpg (multipart/x-mixed-replace)
+      and a snapshot at /snapshot.jpg.
+    - The camera loop (already processes every frame) pushes the
+      annotated JPEG into the server's slot: server.update(frame_bytes).
+    - Toggle in the UI: "Start Streaming (port 8554/8000)".
+    - Mission control opens http://<edge-ip>:8000/stream.mjpg in any
+      browser/VLC — works over LAN, zero extra install.
+  (Alternative if richer control is needed: FFmpeg RTSP push or
+  MediaMTX, but MJPEG is enough for the demo and is fully offline.)
+
+  S5. LOCAL VIDEO STORAGE (solves P5, R5b)
+  ------------------------------------------------------------
+  - In the task-verification loop, open cv2.VideoWriter(
+      f"recordings/experiment_<datetime>.mp4",
+      cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
+    and write the ANNOTATED frame every loop iteration.
+  - Add a toggle (Record video ON/OFF) + disk-space guard, stop/release
+    on Stop/Reset. Optionally record the raw frame to a second file.
+  - Show the current recording file name + size in the System Status.
+
+  S6. ORIENTATION-AGNOSTIC POSE (solves P6, R8) — staged plan
+  ------------------------------------------------------------
+  Stage 1 (quick win, keep 2D YOLO):
+    - Rewrite the geometry to be rotation-invariant:
+        * Use joint ANGLES only (already angle-based) and drop every
+          vertical-ordering test (hip.y < knee.y < ankle.y).
+        * Express 'down' relative to the TORSO frame: define a body
+          basis from shoulder-mid -> hip-mid (the body's own axis) and
+          measure limb direction relative to that axis, not the image.
+        * Derive the astronaut's orientation (roll angle of torso axis
+          vs. image axes) and log it — the rack, not the floor, is the
+          reference frame.
+    - This alone makes Standing/Sitting/limb tests survive arbitrary
+      camera/roll orientation.
+  Stage 2 (true 3D, the 'optional' differentiator):
+    - Integrate an orientation-agnostic 3D HMR / 3D-pose model:
+        * 4DHumans / HMR 2.0 or SMPL-X (mesh + joints), or MediaPipe
+          Holistic 3D as a lighter option.
+        * Convert the 3D joints to the payload-rack frame: register the
+          rack corners once (or detect the rack box with the custom
+          YOLO model from S7) and compute the body pose in rack
+          coordinates.
+    - Feed the 3D joint set into the same task detectors
+      (task_detection.py already accepts dict/array keypoints — extend
+      _get_kp to map 3D output; thresholds stay scale-free).
+
+  S7. CUSTOM DATASET + FINE-TUNED MODEL (solves P7, R7)
+  ------------------------------------------------------------
+  1. Collect data: fixed-payload-camera videos of the actual experiment
+     steps (every step x several subjects x lighting angles).
+  2. Annotate: CVAT / Label Studio / Roboflow
+     - object detection: rack, sample container, tools, glove marks
+     - pose: verify/extend keypoints
+     - hand-object interaction: held / reaching / releasing states
+  3. Augment: rotation (simulate any astronaut orientation!), flips,
+     brightness/blur, synthetic composites.
+  4. Train: ultralytics CLI —
+       yolo detect train data=bas_objects.yaml model=yolo11n.pt epochs=100
+       yolo pose train  data=bas_pose.yaml    model=yolo11n-pose.pt ...
+  5. Replace MODEL_PATH in object_detection.py / pose_detection.py with
+     the custom .pt weights; keep COCO classes as fallback via a merged
+     label map.
+  6. For interaction: the rule-engine (object_tasks.py) already handles
+     held/lift/carry — with better trained 'held-object' detection the
+     handcrafted geometry becomes even more robust.
+
+  S8. EDGE PERFORMANCE (solves P8)
+  ------------------------------------------------------------
+  - Export once at build time: model.export(format="onnx", imgsz=480)
+    (or engine/tensorrt, or int8) and load with onnxruntime in
+    pose_detection.py / object_detection.py — 2-4x CPU speedup and a
+    much smaller standalone bundle.
+  - Run object detection every Nth frame (e.g., every 2nd-3rd) —
+    ObjectTracker already interpolates identity between detections
+    (tracks survive up to 12 missed frames), so per-frame detection is
+    unnecessary.
+  - Optionally drop imgsz 640 -> 480 for the detection model.
+  - Keep TV_BATCH_FRAMES adaptive: measure loop time, increase batch if
+    the UI (not the AI) is the bottleneck.
+
+  S9. MULTI-CAM / OCCLUSION MITIGATION (solves P9)
+  ------------------------------------------------------------
+  - Support 2 fixed cameras (front + side of the rack): run the same
+    pipeline per camera, merge evidence (a hold confirmed in EITHER
+    view counts; placement requires agreement). The evidence pattern
+    in object_tasks.evaluate_evidence() is already per-frame and
+    view-agnostic — add a 'view' tag to tracks.
+  - For lighting: adaptive HSV ranges (recompute the saturation/value
+    floor from a histogram of the current frame) and require the color
+    measurement to match across K consecutive frames.
+  - For depth-faking: combine 2D evidence with size-change consistency
+    (an object moving INTO a box grows/shrinks plausibly with the rack
+    reference box) — cheap monocular sanity check.
+
+  S10. RUN ROBUSTNESS (solves P10)
+  ------------------------------------------------------------
+  - Replace the 200-row cap with the persistent log (S1); the UI reads
+    the last N rows from the file.
+  - Persist the session (session state -> json dump of steps state) so
+    a crash can resume the same experiment; add "Resume last run" in
+    the UI.
+  - Auto camera-reconnect loop with exponential backoff when frames
+    stop arriving (currently the loop just breaks).
+
+--------------------------------------------------------------------------------
+4. PRIORITY ROADMAP (WHAT TO BUILD IN WHICH ORDER)
+--------------------------------------------------------------------------------
+
+  Phase 1 — close the mandatory statement gaps fast (1-2 weeks)
+    [S1] timestamped report file        (R4, small effort, high impact)
+    [S2] skip/out-of-sequence voice     (R3, small effort)
+    [S3] next-step suggestion + voice   (R2, small effort)
+    [S5] local video recording          (R5b, small effort)
+    [S4] MJPEG stream                   (R5a, medium effort)
+
+  Phase 2 — trained model + robustness (2-4 weeks)
+    [S7] dataset collection + fine-tune (R7, the scored deliverable)
+    [S8] ONNX/int8 export + every-Nth   (edge real-time claim)
+    [S10] resume + reconnect + unlimited log
+
+  Phase 3 — the space differentiator (optional, high score value)
+    [S6] rotation-invariant geometry, then 3D HMR + rack-frame  (R8)
+    [S9] second camera + lighting-robust color
+
+  Deliverable statement this yields:
+  "A trained, offline, standalone AI system that watches a fixed payload
+   camera, enforces the experiment step sequence, speaks the next step
+   and alerts on skips, records/stream video locally, and writes a
+   timestamped structured report — with orientation-agnostic pose for
+   microgravity."
+
+--------------------------------------------------------------------------------
+5. ONE-LINE MAPPING (PROBLEM -> FIX -> FILE)
+--------------------------------------------------------------------------------
+
+  P1 report file          -> S1 experiment_log.py + task_detection hook
+  P2 voice on skip/wrong  -> S2 task_detection violation + camera.py speak
+  P3 next-step suggestion -> S3 camera.py banner + speak_alert
+  P4 stream to IP         -> S4 stream_server.py (MJPEG)
+  P5 store video          -> S5 cv2.VideoWriter in camera.py
+  P6 no fixed up/down     -> S6 rotation-invariant geometry + HMR 2.0
+  P7 generic COCO model   -> S7 custom dataset + yolo train
+  P8 edge speed           -> S8 ONNX/int8 + detect-every-Nth-frame
+  P9 single view/occlusion-> S9 dual camera + adaptive HSV
+  P10 crash fragility     -> S10 persist + resume + auto-reconnect
+
+================================================================================
+ END OF DOCUMENT
+================================================================================
