@@ -126,6 +126,19 @@ check("'open the box' -> unsupported",
 key, detail = parse_object_task("Do a backflip")
 check("Unknown text -> (None, {{}})", key is None and detail == {})
 
+key, detail = parse_object_task("Clean the workstation")
+check("'Clean the workstation' -> clean_workstation",
+      key == "clean_workstation" and not detail.get("unsupported"),
+      f"(got {key}, {detail})")
+
+key, detail = parse_object_task(
+    "Cleaning a workstation Collect cleaning equipment "
+    "clean designated area dispose/store cleaning material"
+)
+check("Full cleaning-assignment text -> clean_workstation",
+      key == "clean_workstation" and not detail.get("unsupported"),
+      f"(got {key}, {detail})")
+
 key, detail = parse_object_task(
     "Put 3 red colored object into matching box"
 )
@@ -635,6 +648,63 @@ for i in range(20):
     )
 check("Bottle only in middle -> NOT completed",
       session.steps[0]["state"] != "COMPLETED")
+
+# -----------------------------------------------------
+print("\\n--- TEST 13: clean_workstation staged pipeline ---")
+
+tracker = ObjectTracker()
+ctx = make_context(tracker, [])
+session = TaskVerificationSession(["Clean the workstation"])
+
+table_box = [0, 400, 640, 480]      # designated area = table surface
+
+r = None
+for i in range(46):
+    if i < 4:
+        # stage 1: grip the equipment (wrist on the bottle)
+        wx, wy = 450, 415
+        box = [430, 395, 470, 455]
+    elif i < 22:
+        # stage 2: wiping — wrist oscillates laterally over the table,
+        # bottle follows the hand (held)
+        wx = 360 if ((i - 4) % 4) < 2 else 440
+        wy = 415
+        box = [wx - 20, 395, wx + 20, 455]
+    else:
+        # stage 3: put the bottle back down (release + stable)
+        wx, wy = 450, 250
+        box = [420, 400, 460, 460]
+
+    kp = standing_keypoints(right_wrist=(wx, wy),
+                            left_wrist=(180, 500))
+    r = feed_object_frame(
+        session, ctx,
+        [make_det("dining table", table_box, 0.15),
+         make_det("bottle", box)],
+        [make_person(kp, track_id=1)]
+    )
+
+check("clean_workstation COMPLETED (staged)",
+      session.steps[0]["state"] == "COMPLETED",
+      f"(state={session.steps[0]['state']}, reasons={r['reasons']})")
+
+# negative: wiping with nothing stored (equipment never put down)
+tracker = ObjectTracker()
+ctx = make_context(tracker, [])
+session = TaskVerificationSession(["Clean the workstation"])
+for i in range(30):
+    wx = 360 if (i % 4) < 2 else 440
+    kp = standing_keypoints(right_wrist=(wx, 415),
+                            left_wrist=(180, 500))
+    r = feed_object_frame(
+        session, ctx,
+        [make_det("dining table", table_box, 0.15),
+         make_det("bottle", [wx - 20, 395, wx + 20, 455])],
+        [make_person(kp, track_id=1)]
+    )
+check("Wiping but equipment never stored -> NOT completed",
+      session.steps[0]["state"] != "COMPLETED",
+      f"(state={session.steps[0]['state']}, reasons={r['reasons']})")
 
 # -----------------------------------------------------
 # BONUS: ObjectTrack direct API sanity

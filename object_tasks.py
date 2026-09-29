@@ -12,7 +12,7 @@ Every task is verified from REAL sensors:
 
 HONEST SUPPORT MATRIX (of the user's 28 requested tasks):
 
-  SUPPORTED (REAL verification from RGB + COCO + tracking): 22
+  SUPPORTED (REAL verification from RGB + COCO + tracking): 23
     1  pick_bottle              12 place_marked_location
     2  pick_object              13 remove_marked_location
     3  place_object_box         14 sort_containers
@@ -27,6 +27,7 @@ HONEST SUPPORT MATRIX (of the user's 28 requested tasks):
    25 transfer_containers
    26 collect_one_by_one
    27 pick_move_workstation
+   28 clean_workstation
 
   UNSUPPORTED (honest — unreliable/fine-grained/hidden info): 6
     8  open box (lid occlusion state is not RGB-observable)
@@ -48,6 +49,7 @@ never a random completion.
 """
 
 import math
+from collections import deque
 
 from object_tracking import ObjectTracker, draw_tracks, _box_diag, _wrist
 
@@ -289,6 +291,23 @@ TASK_LIBRARY = {
         "requires": ["bottle", "place 1 = left third of view, "
                      "place 2 = right third"],
     },
+    # ---- cleaning ----
+    "clean_workstation": {
+        "label": "Cleaning a Workstation",
+        "phrases": ["clean the workstation", "clean workstation",
+                    "cleaning a workstation", "cleaning workstation",
+                    "clean the designated area", "clean designated area",
+                    "clean the work area", "clean the table",
+                    "clean the desk", "wipe the table", "wipe the desk",
+                    "wipe the surface", "collect cleaning equipment",
+                    "cleaning equipment clean designated area",
+                    "dispose store cleaning material", "cleaning task"],
+        "requires": [
+            "cleaning equipment (bottle/bowl/cup/brush-like object)",
+            "designated area (marked location or a table/sink in view)",
+            "a place to dispose/store (container or stable surface)",
+        ],
+    },
 }
 
 # ------------------------------------------------------------
@@ -323,7 +342,8 @@ UNSUPPORTED_TASKS = {
         "label": "Complete a Multi-Step Maintenance Procedure",
         "reason": ("Maintenance steps are domain-specific — verifying "
                    "them from generic RGB sensors would be unreliable. "
-                   "Instead, specific steps can be defined in "
+                   "'Clean the workstation' IS supported as its own "
+                   "task; other procedures can be defined in "
                    "Multi-Step Task mode."),
     },
 }
@@ -1238,6 +1258,305 @@ def h_move_bottle_places(context, ev):
 
 
 # ------------------------------------------------------------
+# CLEANING TASK (workstation cleaning — 3 sub-steps)
+# ------------------------------------------------------------
+
+# Cleaning equipment mapped to real COCO classes:
+#   spray bottle / detergent -> "bottle",  bucket / basin -> "bowl",
+#   cup / mug -> "cup",      brush -> "toothbrush"
+CLEAN_EQUIPMENT_CLASSES = ["bottle", "bowl", "cup", "toothbrush"]
+
+CLEAN_COLLECT_STREAK = 3     # frames holding -> COLLECT confirmed
+CLEAN_WIPE_FRAMES = 10       # wipe-motion frames -> CLEAN confirmed
+WIPE_MIN_SWING = 0.10        # avg wrist travel per frame (x torso length)
+WIPE_MIN_REVERSALS = 2       # direction reversals in the wrist history
+WIPE_HISTORY_LEN = 14        # wrist positions remembered for the wipe test
+
+
+def _designated_region(context):
+    """
+    The designated cleaning area: the Marked Location if set,
+    otherwise the largest visible workstation surface (table/sink/...).
+    Returns (region_box or None, label or None).
+    """
+    if context.marked_location is not None:
+        m = context.marked_location
+        region = [
+            float(m[0]), float(m[1]),
+            float(m[0]) + float(m[2]),
+            float(m[1]) + float(m[3]),
+        ]
+        return region, "marked location"
+
+    stations = context.tracker.of_class(
+        WORKSTATION_CLASSES, MIN_TABLE_CONF
+    )
+
+    if stations:
+        best = max(
+            stations,
+            key=lambda t: (t.box[2] - t.box[0]) * (t.box[3] - t.box[1]),
+        )
+        return list(best.box), f"{best.class_name} surface"
+
+    return None, None
+
+
+def _point_in_region(point, region, expand=0.30):
+    """Is the point inside the region (box slightly expanded)?"""
+    x1, y1, x2, y2 = region
+    w = max(1.0, x2 - x1)
+    h = max(1.0, y2 - y1)
+
+    return (
+        (x1 - expand * w) <= point[0] <= (x2 + expand * w)
+        and (y1 - expand * h) <= point[1] <= (y2 + expand * h)
+    )
+
+
+def _wipe_evidence(context, holder_kp, holder_wrist, region):
+    """
+    Update the per-run wipe evidence on the context and return
+    (wipe_now, swing_px, reversals) for the current frame.
+
+    Wiping = the holding hand moves back and forth (lateral
+    oscillation with direction reversals) while the body stays
+    mostly still, inside/near the designated area.
+    """
+    context._cw_hist.append(
+        (float(holder_wrist[0]), float(holder_wrist[1]))
+    )
+
+    lh = _kp(holder_kp, "left_hip")
+    rh = _kp(holder_kp, "right_hip")
+
+    if lh is not None and rh is not None:
+        context._cw_hip_hist.append(
+            ((lh[0] + rh[0]) / 2.0, (lh[1] + rh[1]) / 2.0)
+        )
+
+    hist = list(context._cw_hist)
+
+    if len(hist) < 6:
+        return False, 0.0, 0
+
+    steps = [
+        math.dist(hist[i - 1], hist[i])
+        for i in range(1, len(hist))
+    ]
+    swing = sum(steps) / len(steps)
+
+    # lateral direction reversals (back-and-forth wiping)
+    reversals = 0
+    prev_dx = 0.0
+
+    for i in range(1, len(hist)):
+        dx = hist[i][0] - hist[i - 1][0]
+
+        if abs(dx) > 1.0:
+            if prev_dx != 0.0 and dx * prev_dx < 0:
+                reversals += 1
+            prev_dx = dx
+
+    # body mostly still (the arms do the work, not the legs)
+    body_still = True
+
+    hpts = list(context._cw_hip_hist)
+
+    if len(hpts) >= 6:
+        hsteps = [
+            math.dist(hpts[i - 1], hpts[i])
+            for i in range(1, len(hpts))
+        ]
+        hip_swing = sum(hsteps) / len(hsteps)
+        body_still = hip_swing <= max(2.0, 0.45 * swing)
+
+    in_region = (
+        region is None
+        or _point_in_region(holder_wrist, region)
+    )
+
+    wipe_now = (
+        swing >= WIPE_MIN_SWING * _torso(holder_kp)
+        and reversals >= WIPE_MIN_REVERSALS
+        and body_still
+        and in_region
+    )
+
+    return wipe_now, swing, reversals
+
+
+def h_clean_workstation(context, ev):
+    """
+    Cleaning a Workstation — staged (like move_bottle_places):
+
+      Stage 1  COLLECT : pick up cleaning equipment
+                         (bottle/bowl/cup/brush-like object)
+      Stage 2  CLEAN   : repetitive wiping motion with it over the
+                         designated area (marked location or a
+                         table/sink surface)
+      Stage 3  STORE   : put the equipment down on a stable surface
+                         or inside a container (dispose or store)
+
+      -> COMPLETED when all three sub-steps have real frame evidence.
+    """
+    tracker = context.tracker
+
+    # lazy per-run state (the context lives for one verification run)
+    if getattr(context, "_cw_hist", None) is None:
+        context._cw_hist = deque(maxlen=WIPE_HISTORY_LEN)
+        context._cw_hip_hist = deque(maxlen=WIPE_HISTORY_LEN)
+        context._cw_hold_streak = 0
+        context._cw_collected = False
+        context._cw_wipe_streak = 0
+        context._cw_wipe_total = 0
+        context._cw_cleaned = False
+
+    equip_tracks = tracker.of_class(
+        CLEAN_EQUIPMENT_CLASSES, MIN_OBJECT_CONF
+    )
+
+    if not equip_tracks:
+        return False, 0.0, [
+            "No cleaning equipment detected — keep a bottle/cup/"
+            "bowl/brush-like object in view"
+        ]
+
+    equip = None
+
+    for track in equip_tracks:
+        if track.is_held():
+            equip = track
+            break
+
+    if equip is None:
+        equip = equip_tracks[0]
+
+    region, region_label = _designated_region(context)
+
+    # ---- holder's wrist (closest hand to the equipment) ----
+    box_cx = (equip.box[0] + equip.box[2]) / 2.0
+    box_cy = (equip.box[1] + equip.box[3]) / 2.0
+
+    holder_kp = None
+    holder_wrist = None
+
+    for person in context.persons or []:
+        keypoints = person.get("keypoints")
+
+        if not keypoints:
+            continue
+
+        for side in ("left", "right"):
+            wrist = _wrist(keypoints, side)
+
+            if wrist is None:
+                continue
+
+            dist = math.dist(wrist, (box_cx, box_cy))
+
+            if holder_wrist is None or dist < holder_wrist[2]:
+                holder_wrist = (wrist[0], wrist[1], dist)
+                holder_kp = keypoints
+
+    # ---- stage 1: COLLECT (equipment held in the hand) ----
+    if equip.is_held():
+        context._cw_hold_streak += 1
+
+        if context._cw_hold_streak >= CLEAN_COLLECT_STREAK:
+            context._cw_collected = True
+    else:
+        context._cw_hold_streak = 0
+
+    # ---- stage 2: CLEAN (repetitive wiping motion) ----
+    wipe_now, swing, reversals = False, 0.0, 0
+
+    if equip.is_held() and holder_wrist is not None:
+
+        wipe_now, swing, reversals = _wipe_evidence(
+            context, holder_kp,
+            (holder_wrist[0], holder_wrist[1]), region
+        )
+
+        if wipe_now:
+            context._cw_wipe_streak += 1
+            context._cw_wipe_total += 1
+
+            if context._cw_wipe_streak >= CLEAN_WIPE_FRAMES:
+                context._cw_cleaned = True
+        else:
+            context._cw_wipe_streak = 0
+
+    else:
+        # wipe evidence only counts while the equipment is held
+        context._cw_hist.clear()
+        context._cw_hip_hist.clear()
+        context._cw_wipe_streak = 0
+
+    # ---- stage 3: STORE / DISPOSE (put down or in a container) ----
+    stored = False
+    store_reason = "equipment still in hand or moving"
+
+    if not equip.is_held():
+
+        in_container = None
+
+        for container in tracker.containers(
+            context.container_classes, MIN_CONTAINER_CONF
+        ):
+            if container.track_id == equip.track_id:
+                continue
+            if equip.inside_box(container.box, expand=0.10):
+                in_container = container.class_name
+                break
+
+        if in_container is not None:
+            stored = True
+            store_reason = (
+                f"equipment resting inside the {in_container} "
+                f"(disposed/stored)"
+            )
+        elif equip.is_stable(frames=4, max_px=8.0):
+            stored = True
+            store_reason = (
+                "equipment put down and resting stable (stored)"
+            )
+
+    # ---- completion: all three sub-steps evidenced ----
+    if context._cw_collected and context._cw_cleaned and stored:
+        return True, _score(context, equip, 0.8, True), [
+            "Workstation cleaning completed — "
+            "1) equipment collected, "
+            f"2) area wiped ({context._cw_wipe_total} wipe frames), "
+            f"3) {store_reason}",
+        ]
+
+    # ---- staged progress reasons ----
+    if not context._cw_collected:
+        return False, 0.0, [
+            "Stage 1/3: pick up the cleaning equipment "
+            "(bottle/cup/bowl/brush) and hold it",
+        ]
+
+    if not context._cw_cleaned:
+        area_hint = (
+            f"the {region_label}" if region_label
+            else "the visible work surface (or set Marked Location)"
+        )
+        return False, 0.0, [
+            f"Stage 2/3: wipe {area_hint} with the equipment — "
+            f"{context._cw_wipe_streak}/{CLEAN_WIPE_FRAMES} wipe "
+            f"frames (swing {swing:.0f}px/frame, "
+            f"reversals {reversals})",
+        ]
+
+    return False, 0.0, [
+        "Stage 3/3: put the cleaning equipment down on the surface "
+        "or inside a container (dispose/store)"
+    ]
+
+
+# ------------------------------------------------------------
 # TOOL TASKS
 # ------------------------------------------------------------
 
@@ -1916,6 +2235,7 @@ HANDLERS = {
     "collect_one_by_one": h_collect_one_by_one,
     "pick_move_workstation": h_pick_move_workstation,
     "move_bottle_places": h_move_bottle_places,
+    "clean_workstation": h_clean_workstation,
 }
 
 TASK_LABELS = {

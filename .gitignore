@@ -216,5 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-# YOLO model files
+# YOLO model files (the two deployment weights are committed on
+# purpose so the container never downloads models at startup)
 *.pt
+!yolo11n.pt
+!yolo11n-pose.pt

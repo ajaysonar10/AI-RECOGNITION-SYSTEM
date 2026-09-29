@@ -1,0 +1,23 @@
+# Keep the image small and secret-free
+AI-Recognition-System/
+diagrams/
+__pycache__/
+*.py[cod]
+*.spec
+build/
+dist/
+.env
+.envrc
+*.log
+.streamlit/secrets.toml
+test_*.py
+*_test.py
+live_retest.py
+FLOWCHART.md
+LAG_FIX_PROGRESS.md
+PROGRESS_*.md
+PROGRAM_WORKING_STEP_BY_STEP.txt
+TASK_LIST.txt
+LIBRARIES.txt
+Desktop_App/
+*.bat

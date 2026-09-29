@@ -3,6 +3,19 @@ from object_detection import detect_objects
 from object_tracking import ObjectTracker, draw_tracks
 from object_tasks import ObjectTaskContext, get_task_requirements
 from step_validator import StepValidator
+from camera_worker import (
+    CameraWorker,
+    start_worker,
+    stop_active_worker,
+    empty_task_result,
+)
+
+# Web deployment: browser-camera ingest (optional module — the
+# desktop/localhost flow must keep working even if it is absent)
+try:
+    import web_camera
+except ImportError:
+    web_camera = None
 from task_detection import (
     TaskVerificationSession,
     parse_task_text,
@@ -1519,9 +1532,29 @@ def show_task_verification():
 
     st.subheader("📷 Camera Source")
 
+    _cam_sources = ["Laptop Camera", "Connect with Mobile"]
+    if web_camera is not None:
+        _cam_sources.append("🌐 Web Browser Camera")
+
+    # On the public deployment there IS no server webcam — visitors
+    # use their own device camera through the browser, so make that
+    # the default source there. Localhost keeps Laptop Camera.
+    _default_source = "Laptop Camera"
+    try:
+        _host = st.context.headers.get("host", "")
+        _on_public_host = bool(_host) and not (
+            _host.startswith("localhost")
+            or _host.startswith("127.0.0.1")
+        )
+        if web_camera is not None and _on_public_host:
+            _default_source = "🌐 Web Browser Camera"
+    except Exception:
+        pass
+
     camera_type = st.radio(
         "Select Camera Source",
-        ["Laptop Camera", "Connect with Mobile"],
+        _cam_sources,
+        index=_cam_sources.index(_default_source),
         horizontal=True,
         key="tv_camera_type"
     )
@@ -1540,6 +1573,26 @@ def show_task_verification():
             value=int(st.session_state.get("tv_port", 8080)),
             key="tv_port_input"
         )
+
+    if (
+        camera_type == "🌐 Web Browser Camera"
+        and web_camera is not None
+        and st.session_state.tv_cam_on
+    ):
+        _sid = st.context.session_id
+        web_camera.render_web_camera(_sid)
+        _wb = web_camera.get_buffer(_sid)
+        if _wb.stats()["age"] >= 0 and not _wb.isOpened():
+            st.error(
+                "⚠️ Camera stream stopped — the browser stopped "
+                "sending frames. Double-click the camera preview "
+                "to retry."
+            )
+        elif _wb.stats()["age"] > 1.5:
+            st.warning(
+                "Waiting for browser frames… if nothing appears, "
+                "check the permission prompt in your browser."
+            )
 
     # ----------------------------------------------
     # ACTION BUTTONS
@@ -1582,7 +1635,7 @@ def show_task_verification():
     if stop_cam_pressed:
         # The camera stops ONLY here
         st.session_state.tv_cam_on = False
-        release_task_camera()
+        release_task_camera()   # joins + releases the ONE worker
         st.session_state.tv_running = False
         st.session_state.task_session = None
         st.rerun()
@@ -1700,15 +1753,175 @@ def show_task_verification():
 
         detection_placeholder = st.empty()
 
-    status_placeholder.success("Camera: 🟢 RUNNING")
+    # ==================================================
+    # LAG FIX: the whole live section below is a FRAGMENT.
+    # Only it re-runs (~4 Hz); the rest of the page (buttons,
+    # inputs, options) is NOT re-rendered, so clicks land
+    # instantly instead of queuing behind a full-page rerun.
+    # All inference runs in the ONE background worker; the
+    # fragment only renders the worker's latest snapshot.
+    # ==================================================
+
+    @st.fragment(run_every="0.25s")
+    def _tv_live_fragment():
+        _tv_render_live_frame(
+            status_placeholder, frame_placeholder,
+            activity_metric, streak_metric,
+            progress_metric, detection_placeholder,
+        )
+
+    _tv_live_fragment()
+
+
+def _tv_open_camera(camera_kind):
+    """
+    Opens the right camera for the selected source.
+
+    - "Laptop Camera" / "Connect with Mobile" -> cv2.VideoCapture
+      (server-side device, exactly like before)
+    - "🌐 Web Browser Camera" -> WebVideoStream (frames uploaded
+      from the visitor's browser through /_basai/frame)
+    """
+
+    if camera_kind == "🌐 Web Browser Camera":
+        if web_camera is None:
+            return None
+        return web_camera.WebVideoStream(st.context.session_id)
+
+    return _task_camera(camera_kind)
+
+
+def _tv_render_live_frame(
+    status_placeholder, frame_placeholder,
+    activity_metric, streak_metric,
+    progress_metric, detection_placeholder,
+):
+    """
+    One fragment run: pulls the worker's latest snapshot and
+    updates ONLY the camera + live panels (no full-page rerun,
+    no blocking sleep — Stop/Reset/Clear respond immediately).
+    """
 
     # ----------------------------------------------
-    # TASK COMPLETED — show the banner (~2.5s), then the task clears
-    # automatically: the operator can give the next task, THE CAMERA
-    # KEEPS RUNNING.
+    # WORKER — the single source of camera frames + inference
     # ----------------------------------------------
 
+    worker = CameraWorker.get_active()
+
+    # Which source is active (laptop/mobile device vs browser cam)
+    camera_kind = st.session_state.get(
+        "tv_camera_type", "Laptop Camera"
+    )
+
+    if worker is None:
+        # UI says the camera is on, but the worker died/restarted
+        # (script rerun, exception) -> start it on the SAME cap.
+        cap = st.session_state.get("tv_cap")
+
+        if (
+            cap is None
+            or not cap.isOpened()
+            or st.session_state.get("tv_cap_kind") != camera_kind
+        ):
+            if cap is not None:
+                # Source switched (e.g. laptop -> web browser): the
+                # old device must be closed before opening the new one.
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+                cap = None
+
+            cap = _tv_open_camera(camera_kind)
+
+            if cap is None:
+                if camera_kind == "🌐 Web Browser Camera":
+                    status_placeholder.error(
+                        "❌ Browser camera could not start — allow "
+                        "the permission prompt, then STOP + START "
+                        "the camera."
+                    )
+                else:
+                    status_placeholder.error(
+                        "❌ Camera could not be opened — the server "
+                        "has no webcam. Select **🌐 Web Browser "
+                        "Camera** above to use your device camera."
+                    )
+                return
+
+            st.session_state.tv_cap = cap
+            st.session_state.tv_cap_kind = camera_kind
+
+            # Fresh trackers (old run's history must not leak in)
+            reset_tracker()
+            obj_ctx = st.session_state.get("tv_object_context")
+            if obj_ctx is not None:
+                obj_ctx.tracker.reset()
+                st.session_state.tv_tracks = []
+
+        worker, _started = start_worker(
+            cap,
+            camera_kind,
+            on_camera_lost=_tv_on_camera_lost,
+        )
+
+    # ----------------------------------------------
+    # LIVE STATE SYNC (UI decisions -> worker inputs)
+    # The worker thread only READS these — safe under the GIL.
+    # ----------------------------------------------
+
+    shared = worker._shared
+
+    task_session = st.session_state.get("task_session")
     if task_session is not None and task_session.all_completed:
+        task_session = None   # banner below; verification stops
+
+    shared.task_session = task_session
+    shared.object_context = st.session_state.get(
+        "tv_object_context"
+    )
+    shared.marked_location = st.session_state.get(
+        "tv_marked_location"
+    )
+
+    # ----------------------------------------------
+    # HISTORY EVENTS (task history — activity history se alag)
+    # (the old batch did this per frame; the worker appends,
+    # the UI thread drains — no Streamlit calls in the thread)
+    # ----------------------------------------------
+
+    if shared.events:
+        drained = shared.events[:]
+        del shared.events[:]
+        for event in drained:
+            st.session_state.task_history.insert(0, event)
+        st.session_state.task_history = (
+            st.session_state.task_history[:200]
+        )
+
+    # Live object tracks — _render_task_status's "What the AI
+    # sees" expander reads this session key (the old batch set it
+    # per frame; the worker keeps them in shared.tracks now)
+    st.session_state.tv_tracks = shared.tracks
+
+    # ----------------------------------------------
+    # CAMERA LOST — worker reported dead frames
+    # ----------------------------------------------
+
+    if not shared.running or shared.camera_lost:
+        release_task_camera()
+        st.session_state.tv_running = False
+        st.session_state.tv_camera_lost = True
+        st.rerun(scope="fragment")
+
+    # ----------------------------------------------
+    # TASK COMPLETED — banner (~2.5s, timestamp-driven: NO
+    # blocking sleep), then auto-reset. CAMERA KEEPS RUNNING.
+    # ----------------------------------------------
+
+    session_all = st.session_state.get("task_session")
+
+    if session_all is not None and session_all.all_completed:
 
         first_seen = st.session_state.get("tv_completed_at")
 
@@ -1724,12 +1937,12 @@ def show_task_verification():
             summary_col1, summary_col2, summary_col3 = st.columns(3)
 
             with summary_col1:
-                st.metric("Total Steps", len(task_session.steps))
+                st.metric("Total Steps", len(session_all.steps))
 
             with summary_col2:
                 avg_confidence = (
-                    sum(s["confidence"] for s in task_session.steps)
-                    / len(task_session.steps)
+                    sum(s["confidence"] for s in session_all.steps)
+                    / len(session_all.steps)
                 )
                 st.metric(
                     "Avg Confidence",
@@ -1737,9 +1950,9 @@ def show_task_verification():
                 )
 
             with summary_col3:
-                st.metric("Mode", task_session.mode.title())
+                st.metric("Mode", session_all.mode.title())
 
-            for step in task_session.steps_view():
+            for step in session_all.steps_view():
                 st.success(
                     f"✓ Step {step['number']} — {step['text']} "
                     f"({step['confidence']:.0f}%)"
@@ -1750,340 +1963,149 @@ def show_task_verification():
                 "Enter the next task anytime."
             )
 
-            time.sleep(1.0)   # banner readable, phir auto-reset
-            st.rerun()
+            # Old code: time.sleep(1.0) + full rerun (blocked ALL
+            # clicks). Fragment reruns on its own timer now.
+            return
 
         # 2.5s passed -> task reset (already logged in history)
         st.session_state.task_session = None
         st.session_state.tv_running = False
         st.session_state.tv_completed_at = None
         st.session_state.tv_object_context = None
-        task_session = None
-        st.rerun()
+        st.rerun(scope="fragment")
 
     st.session_state.tv_completed_at = None
 
     # ----------------------------------------------
-    # CAMERA — stays in session_state so the device does not have to
-    # be reopened between Stop/Resume batches.
+    # LATEST SNAPSHOT (latest-writer-wins — stale frames are    # never queued, so the picture is always "now")
     # ----------------------------------------------
 
-    cap = st.session_state.get("tv_cap")
+    snapshot = shared.latest()
 
-    if cap is None or not cap.isOpened():
-
-        cap = _task_camera(camera_type)
-
-        if cap is None:
-            status_placeholder.error("❌ Camera could not be opened.")
-            return
-
-        st.session_state.tv_cap = cap
-
-        # Give the person tracker a fresh start (so the old run's
-        # movement history does not affect the new analysis)
-        reset_tracker()
-
-        # Object tracker/context fresh too (so the old run's track
-        # history does not corrupt displacement measurement)
-        obj_ctx = st.session_state.get("tv_object_context")
-
-        if obj_ctx is not None:
-            obj_ctx.tracker.reset()
-            st.session_state.tv_tracks = []
+    if snapshot is None:
+        status_placeholder.success("Camera: 🟢 STARTING...")
+        return
 
     # ----------------------------------------------
-    # MONITOR-ONLY MODE (no task active): the camera still shows
-    # pose + activity + live objects — just no task
-    # verification runs.
+    # FRAME + METRICS + DETECTION LINE (same content as before)
     # ----------------------------------------------
 
-    if task_session is None and st.session_state.get(
-        "tv_object_context"
-    ) is None:
-        st.session_state.tv_object_context = ObjectTaskContext(
-            ObjectTracker()
+    annotated = snapshot["annotated"]
+    persons = snapshot["persons"]
+    result = snapshot["task_result"]
+
+    try:
+        frame_placeholder.image(
+            cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
+            channels="RGB",
+            use_container_width=True
         )
+    except Exception:
+        return   # placeholder gone (page switched) — stop quietly
 
-    # ~1 second ka processing batch (batch design ka reason
-    # function docstring me hai)
-    _task_verification_batch(
-        cap, task_session, main_col, status_col,
-        frame_placeholder, activity_metric, streak_metric,
-        progress_metric, detection_placeholder,
-        st.session_state.get("tv_object_context"),
+    status_placeholder.success(
+        f"Camera: 🟢 RUNNING "
+        f"({snapshot['capture_fps']:.1f} FPS capture, "
+        f"{snapshot['pose_fps']:.1f} pose, "
+        f"{snapshot['object_fps']:.1f} obj)"
     )
+
+    if persons:
+        activity_metric.metric("Activity", persons[0]["activity"])
+    else:
+        activity_metric.metric("Activity", "No Person")
+
+    streak_metric.metric(
+        "Confirmation",
+        f"{result['streak']}/{result['required_frames']}"
+    )
+
+    progress_metric.metric(
+        "Progress",
+        f"{int(result['progress'] * 100)}%"
+    )
+
+    if result["step_completed"]:
+        detection_placeholder.success(
+            f"✓ Step {result['completed_step_number']} "
+            f"COMPLETED — next step unlocked!"
+        )
+    elif result["detected"]:
+        detection_placeholder.warning(
+            "🟢 Action detected — keep it steady "
+            "for temporal confirmation!"
+        )
+    else:
+        # Show the REAL reason ("No object detected..." etc.) —
+        # instead of a generic message (detection debugging)
+        reason = (
+            result["reasons"][0] if result["reasons"]
+            else "perform the current step."
+        )
+        detection_placeholder.info(f"🤖 {reason}")
+
+    # ----------------------------------------------
+    # STATUS COLUMN (same panels as before)
+    # ----------------------------------------------
+
+    object_context = shared.object_context
+
+    if task_session is not None:
+        _render_task_status(task_session, result, object_context)
+    else:
+        # Monitor-only: live status without task verification
+        st.markdown("**CURRENT TASK**\n\n*No task selected*")
+        st.info("ℹ️ Enter a task above anytime — camera keeps "
+                "running.")
+
+        with st.expander("👁 What the AI sees (live objects)"):
+            tracks = shared.tracks or []
+
+            if not tracks:
+                st.caption(
+                    "No objects detected right now. Hold a "
+                    "recognizable item toward the camera: "
+                    "phone, bottle, cup, book, banana, remote..."
+                )
+            else:
+                for t in tracks:
+                    state = ""
+
+                    if t.is_held():
+                        state = (
+                            f" — ✋ HELD, lift "
+                            f"{t.effective_lift_px():.0f}px "
+                            f"({t.hold_frames} frames)"
+                        )
+                    elif t.ever_held:
+                        state = " — was held"
+
+                    st.caption(
+                        f"• #{t.track_id} **{t.class_name}** — "
+                        f"{t.confidence * 100:.0f}% "
+                        f"confidence{state}"
+                    )
+
+
+def _tv_on_camera_lost():
+    """Worker callback (worker thread — NO Streamlit calls here)."""
+    print("[camera_worker] camera lost — stopping worker")
 
 
 def release_task_camera():
     """Task verification camera release (idempotent)."""
-    cap = st.session_state.pop("tv_cap", None)
-    if cap is not None:
+    # Lag fix: the camera device belongs to the ONE background
+    # worker now — stopping it must join + release through there.
+    stop_active_worker()
+
+    # Web mode: also close the browser-frame buffer for THIS session
+    if web_camera is not None:
         try:
-            cap.release()
-        except Exception as exc:
-            print("Camera release error:", exc)
+            web_camera.drop_buffer(st.context.session_id)
+        except Exception:
+            pass
+
+    st.session_state.pop("tv_cap", None)
+    st.session_state.pop("tv_cap_kind", None)
 
 
-def _task_verification_batch(
-    cap, task_session, main_col, status_col,
-    frame_placeholder, activity_metric, streak_metric,
-    progress_metric, detection_placeholder,
-    object_context=None,
-):
-    """
-    Processes a ~1 second frame batch, then reruns.
-
-    Reason for the batch design: one long Python loop blocks the
-    Streamlit script — Stop/Reset/New Task clicks then sit pending
-    in the queue and never execute. With small batches every click
-    takes effect within 1-2 seconds. The camera stays in
-    session_state, so the device is not reopened every batch
-    (no flicker).
-    """
-
-    # ----------------------------------------------
-    # LIVE BATCH — camera frame → YOLO Pose → (task logic)
-    # The camera runs ON EVERY FRAME — with or without a task.
-    # ----------------------------------------------
-
-    for _ in range(TV_BATCH_FRAMES):
-
-        if not st.session_state.tv_cam_on:
-            break
-
-        ret, frame = cap.read()
-
-        if not ret:
-            # Frame loss -> camera release + paused state
-            release_task_camera()
-            st.session_state.tv_running = False
-            st.session_state.tv_camera_lost = True
-            st.rerun()
-
-        # ------------------------------------------------
-        # EXISTING pose pipeline reuse (keypoints + activity)
-        # ------------------------------------------------
-
-        annotated, persons = analyze_frame(frame)
-
-        # ------------------------------------------------
-        # OBJECT TASKS: YOLO objects -> tracker -> context
-        # (extra YOLO-object inference only in object-interaction
-        # runs me hota hai — pose-only runs unchanged performance)
-        # ------------------------------------------------
-
-        current_action = None
-
-        if task_session is not None:
-            current_step = task_session.current_step()
-            if current_step is not None:
-                current_action = current_step.get("action")
-
-        if object_context is not None:
-            # conf 0.10: weak-but-real detections (a dining table at
-            # a webcam angle scores 0.07-0.11) must reach the tracker —
-            # task-level gates (MIN_OBJECT_CONF/MIN_TABLE_CONF +
-            # avg_confidence) filter further downstream. A detector-level
-            # 0.30 removed the table from the pipeline entirely.
-            _, objects = detect_objects(frame, conf=0.10)
-
-            object_context.persons = persons
-            object_context.objects = objects
-            object_context.last_frame = frame
-
-            marked = st.session_state.get("tv_marked_location")
-            object_context.marked_location = (
-                list(marked) if marked else None
-            )
-
-            tracks = object_context.tracker.update(objects, persons)
-            st.session_state.tv_tracks = tracks
-
-            region = None
-
-            if object_context.marked_location is not None:
-                m = object_context.marked_location
-                region = [
-                    m[0], m[1], m[0] + m[2], m[1] + m[3]
-                ]
-
-            # Move Bottle (Place 1 -> Place 2) demo: left/right
-            # third overlays (for stage guidance)
-            if current_action == "move_bottle_places":
-                fw = float(annotated.shape[1])
-                fh = float(annotated.shape[0])
-                region = [
-                    [0.0, 0.0, fw / 3.0, fh],
-                    [fw * 2.0 / 3.0, 0.0, fw, fh],
-                ]
-
-            draw_tracks(annotated, tracks, region_box=region)
-
-        # ------------------------------------------------
-        # TASK LOGIC — only while a task is active. No task = general
-        # monitoring (pose + activity + objects), no verification.
-        # ------------------------------------------------
-
-        if task_session is not None:
-            result = verify_task_step(
-                task_session, persons, object_context=object_context
-            )
-        else:
-            result = {
-                "detected": False,
-                "step_completed": False,
-                "all_completed": False,
-                "current_step": None,
-                "state": "IDLE",
-                "streak": 0,
-                "required_frames": 0,
-                "progress": 0.0,
-                "confidence": 0.0,
-                "reasons": [],
-                "events": [],
-                "completed_step_number": None,
-            }
-
-        # ------------------------------------------------
-        # HISTORY EVENTS (task history — activity history se alag)
-        # ------------------------------------------------
-
-        for event in result["events"]:
-            st.session_state.task_history.insert(0, event)
-
-        st.session_state.task_history = (
-            st.session_state.task_history[:200]
-        )
-
-        # ------------------------------------------------
-        # FRAME + TASK LABEL DRAW
-        # ------------------------------------------------
-
-        label_text = None
-
-        if result["all_completed"]:
-            label_text = "ALL TASKS COMPLETED"
-        elif result["current_step"]:
-            label_text = (
-                f"TASK: {result['current_step'].upper()} "
-                f"| {result['streak']}/"
-                f"{result['required_frames']}"
-            )
-
-        if label_text:
-
-            cv2.putText(
-                annotated,
-                label_text,
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 120),
-                2,
-                cv2.LINE_AA
-            )
-
-        # ------------------------------------------------
-        # UI UPDATE (camera ke beside status)
-        # ------------------------------------------------
-
-        with main_col:
-
-            frame_placeholder.image(
-                cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
-                channels="RGB",
-                use_container_width=True
-            )
-
-            if persons:
-                main_person = persons[0]
-                activity_metric.metric(
-                    "Activity",
-                    main_person["activity"]
-                )
-            else:
-                activity_metric.metric("Activity", "No Person")
-
-            streak_metric.metric(
-                "Confirmation",
-                f"{result['streak']}/{result['required_frames']}"
-            )
-
-            progress_metric.metric(
-                "Progress",
-                f"{int(result['progress'] * 100)}%"
-            )
-
-            if result["step_completed"]:
-                detection_placeholder.success(
-                    f"✓ Step {result['completed_step_number']} "
-                    f"COMPLETED — next step unlocked!"
-                )
-            elif result["detected"]:
-                detection_placeholder.warning(
-                    "🟢 Action detected — keep it steady "
-                    "for temporal confirmation!"
-                )
-            else:
-                # Show the REAL reason ("No object detected..." etc.) —
-                # instead of a generic message (detection debugging)
-                reason = (
-                    result["reasons"][0] if result["reasons"]
-                    else "perform the current step."
-                )
-                detection_placeholder.info(
-                    f"🤖 {reason}"
-                )
-
-        with status_col:
-
-            if task_session is not None:
-                _render_task_status(task_session, result, object_context)
-            else:
-                # Monitor-only: live status without task verification
-                st.markdown("**CURRENT TASK**\n\n*No task selected*")
-                st.info("ℹ️ Enter a task above anytime — camera keeps "
-                        "running.")
-
-                with st.expander("👁 What the AI sees (live objects)"):
-                    tracks = st.session_state.get("tv_tracks") or []
-
-                    if not tracks:
-                        st.caption(
-                            "No objects detected right now. Hold a "
-                            "recognizable item toward the camera: "
-                            "phone, bottle, cup, book, banana, remote..."
-                        )
-                    else:
-                        for t in tracks:
-                            state = ""
-
-                            if t.is_held():
-                                state = (
-                                    f" — ✋ HELD, lift "
-                                    f"{t.effective_lift_px():.0f}px "
-                                    f"({t.hold_frames} frames)"
-                                )
-                            elif t.ever_held:
-                                state = " — was held"
-
-                            st.caption(
-                                f"• #{t.track_id} **{t.class_name}** — "
-                                f"{t.confidence * 100:.0f}% "
-                                f"confidence{state}"
-                            )
-
-        # ------------------------------------------------
-        # ALL COMPLETED
-        # ------------------------------------------------
-
-        # NOTE: the camera does NOT stop on completion — the task clear
-        # happens in show_task_verification above; the batch keeps running.
-
-    # ----------------------------------------------
-    # BATCH DONE -> fresh render (next batch). Only the STOP CAMERA
-    # button (above) is responsible for the camera.
-    # ----------------------------------------------
-
-    st.rerun()

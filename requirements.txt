@@ -1,5 +1,18 @@
-streamlit
-opencv-python
-ultralytics
-numpy
-pyttsx3
+# BAS-AI — pinned to the versions the app was developed and tested
+# against (Python 3.14 dev env; the container uses 3.11-slim).
+streamlit==1.63.0
+ultralytics==8.4.149
+opencv-python==5.0.0.93
+numpy==2.5.3
+pandas==3.0.5
+pillow==12.3.0
+pyttsx3==2.99
+qrcode==8.2
+requests==2.34.2
+
+# Production launcher (st.App + custom ingest routes)
+uvicorn==0.52.4
+
+# Torch is pulled in by ultralytics automatically; pinned only if the
+# platform resolver needs it. Do NOT add torch>=3 lines here — the
+# CPU wheel selection happens in the Dockerfile.

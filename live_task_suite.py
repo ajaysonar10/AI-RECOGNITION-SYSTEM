@@ -68,6 +68,13 @@ TASKS = [
         "2. Person A holds the object, Person B takes it\n"
         "3. B holds it steady after taking (transfer completes)",
     ),
+    (
+        "Clean the workstation",
+        "1. Keep a table/desk area in view\n"
+        "2. Pick up a cleaning item (bottle/cup/bowl) — COLLECT\n"
+        "3. WIPE the area repeatedly with it (back-and-forth)\n"
+        "4. Put the item down or inside a bowl — DISPOSE/STORE",
+    ),
 ]
 
 

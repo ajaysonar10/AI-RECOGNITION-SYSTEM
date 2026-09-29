@@ -1,6 +1,83 @@
+import os
+import io
 import streamlit as st
 from datetime import datetime
 from camera import show_camera, show_task_evaluation, show_task_verification
+
+# ============================================================
+# SHARE BAS-AI — public URL + QR (web deployment)
+# ============================================================
+
+def _detect_public_url():
+    """
+    Best-effort public URL of this deployment.
+
+    Priority:
+      1. BASAI_PUBLIC_URL env var (set once in the platform settings
+         when the final URL is known — also feeds the QR code)
+      2. HF Spaces: FREEoid.hf.space-style host header (platform adds it)
+      3. The browser's own Origin (works for any HTTPS domain)
+      4. localhost fallback (local dev — QR/Share shows that)
+    """
+    env_url = os.environ.get("BASAI_PUBLIC_URL", "").strip().rstrip("/")
+    if env_url:
+        return env_url, "config"
+
+    try:
+        host = st.context.headers.get("host", "")
+    except Exception:
+        host = ""
+
+    if not host:
+        return "http://localhost:8501", "local"
+
+    scheme = "https"
+    if host.startswith("localhost") or host.startswith("127.0.0.1"):
+        scheme = "http"
+
+    return f"{scheme}://{host}", "auto"
+
+
+def _render_share_section():
+    """Sidebar 'Share BAS-AI' block: public URL + QR code + copy box."""
+
+    public_url, url_source = _detect_public_url()
+
+    with st.sidebar.expander("🔗 Share BAS-AI", expanded=False):
+        st.caption(
+            "Open this link on any phone or laptop to use "
+            "BAS-AI from the browser."
+        )
+
+        st.code(public_url, language=None)
+
+        if url_source == "local":
+            st.caption(
+                "Currently running on localhost — this is the "
+                "development URL."
+            )
+
+        try:
+            import qrcode
+
+            qr = qrcode.QRCode(border=1, box_size=6)
+            qr.add_data(public_url)
+            qr.make(fit=True)
+            buf = io.BytesIO()
+            qr.make_image(fill_color="black", back_color="white") \
+                .save(buf, format="PNG")
+            st.image(buf.getvalue(), width=160)
+            st.caption("Scan to open on a phone.")
+        except ImportError:
+            st.caption(
+                "Install 'qrcode' to show a scannable QR code."
+            )
+
+        st.caption(
+            "Camera permission is requested in the browser when a "
+            "task is started with the 🌐 Web Browser Camera source."
+        )
+
 
 # ============================================================
 # PAGE CONFIGURATION
@@ -206,6 +283,12 @@ with st.sidebar:
     )
 
     st.divider()
+
+    # ----------------------------------------------
+    # SHARE BAS-AI (public URL + QR code — deployment section)
+    # ----------------------------------------------
+
+    _render_share_section()
 
     st.markdown("### 🛰️ Mission")
 

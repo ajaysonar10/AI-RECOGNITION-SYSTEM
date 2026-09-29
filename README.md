@@ -1,165 +1,168 @@
-# 🛰️ AI-RECOGNITION-SYSTEM
+# 🛰️ BAS-AI — AI-Recognition-System
 
-AI powered **Human Activity Recognition System** for real-time monitoring — built for on-board space experiment validation (BAS•AI — Smart India Hackathon 2026).
+Real-time human-activity recognition + verifiable task completion from a
+single camera: YOLO11 Pose + YOLO11 Object Detection + object tracking +
+temporal confirmation. No fake results — every completion is backed by
+real keypoints, real detections and a 12-frame confirmation streak.
 
----
-
-## 📖 Overview
-
-BAS•AI is an intelligent on-board AI system that **detects persons** from a live camera feed, tracks their **position**, and classifies their **activity** (Standing / Sitting / Walking) **with justification** — all in real time.
-
----
-
-## ✨ Features
-
-- 🎯 **Real-time Pose Detection** — 17 body keypoints from YOLO11n-pose (nose, shoulders, hips, knees, ankles...)
-- 👤 **Multi-Person Tracking** — every person gets a stable **Track ID** (frame-to-frame)
-- 📍 **Position Analysis** — bounding box, body center (pixels), and frame region (e.g. `middle-center`)
-- 🧠 **Activity Recognition with Justification** — transparent reasons with every decision:
-  - 🧍 **Standing** — legs straight (knee angle ≥ 155°)
-  - 🪑 **Sitting** — knees bent (knee angle < 125°)
-  - 🚶 **Walking** — jitter-proof detection: net displacement + direction consistency + hysteresis (4-frame confirm)
-  - ❓ **Unknown** — legs not visible, so no false claim
-- 🖥️ **Streamlit Dashboard** — Live Monitor, Activity History, Analytics, System Status
-- 📊 **Live Metrics** — activity, confidence %, persons count, activity stream (1-sec logging)
-- 📱 **Dual Camera Support** — laptop webcam or mobile camera (IP Webcam / DroidCam over Wi-Fi)
-- ✅ **Task Verification** — pose tasks (raise hand, walk...) + 22 object-interaction tasks (pick up bottle, place in box, move Place 1 → Place 2...) verified with real YOLO detection, object tracking and multi-frame temporal confirmation
+Works on **localhost** (desktop webcam) *and* as a **public web app**
+(visitors use their own device camera through the browser).
 
 ---
 
-## 🗂️ Project Structure
-
-```
-AI-Recognition-System/
-├── app.py                    # Streamlit dashboard (main entry)
-├── camera.py                 # Live camera feed + UI integration
-├── pose_detection.py         # ⭐ Core: pose + position + activity + justification
-├── activity_detection.py     # Legacy activity logic (merged into pose_detection.py)
-├── object_detection.py       # Object detection module
-├── object_tracking.py        # Object tracking: hold, lift, displacement
-├── object_tasks.py           # Object-interaction task library (22 tasks)
-├── task_detection.py         # Task session: temporal + sequential verification
-├── live_pose_detection.py    # Standalone webcam demo (without UI)
-└── README.md
-```
-
-### 🔑 Core API (`pose_detection.py`)
-
-```python
-from pose_detection import analyze_frame
-
-annotated_frame, persons = analyze_frame(frame)
-
-for p in persons:
-    print(p["track_id"])           # stable person ID
-    print(p["position"])           # bbox, center, region description
-    print(p["activity"])           # Standing / Sitting / Walking / Unknown
-    print(p["confidence"])         # 0-100
-    print(p["justification"])      # list of reasons (knee angles, movement...)
-    print(p["keypoints"])          # {name: (x, y)} — 17 COCO keypoints
-```
-
-The legacy interface `detect_pose(frame)` is also available (backward compatible).
-
----
-
-## 🚀 Setup & Run
-
-### Requirements
+## ✅ Quick start (localhost — unchanged)
 
 ```bash
-pip install streamlit ultralytics opencv-python
-```
-
-### Run
-
-```bash
-cd AI-Recognition-System
+pip install -r requirements.txt
 streamlit run app.py
 ```
 
-The browser opens `http://localhost:8501` → sidebar → **📡 Live Monitor** → **🟢 Start Camera**
+Open http://localhost:8501 → **Live Monitor** → **Task Verification** →
+choose a camera source → **START CAMERA**.
 
-> ⚠️ On the first run, the `yolo11n-pose.pt` model (~6 MB) auto-downloads.
+The task list, supported tasks and honest refusals are documented in
+[`TASK_LIST.txt`](TASK_LIST.txt).
 
-### Standalone demo (without UI)
+---
 
-```bash
-python pose_detection.py        # webcam + console output (position + justification)
-python live_pose_detection.py   # simple webcam skeleton demo
+## 🌐 Public deployment (Hugging Face Spaces, free)
+
+The recommended target is **Hugging Face Spaces with the Docker SDK**
+(free, 2 vCPU, always-on container, public HTTPS URL). The repo ships
+with everything needed: `Dockerfile`, `.streamlit/config.toml`,
+`run_app.py` (production launcher) and the two YOLO weights.
+
+### Why not other platforms?
+
+| Option | Verdict |
+|---|---|
+| **HF Spaces (Docker)** | ✅ recommended — free, websocket proxying works, persistent container |
+| Railway / Fly.io | works too (same Dockerfile), paid |
+| Streamlit Community Cloud | ❌ 0.7 vCPU — far too weak for real-time YOLO |
+| Vercel / Netlify | ❌ serverless — kills the inference worker |
+| WebRTC (`streamlit-webrtc`) | ❌ needs STUN/TURN servers that PaaS containers don't provide |
+
+### Deploy in 6 steps
+
+1. **Push this repo to GitHub** (the two `*.pt` weight files are part of
+   it — they are whitelisted in `.gitignore` on purpose).
+
+2. **Create the Space**: [huggingface.co/new-space](https://huggingface.co/new-space)
+   → Space name e.g. `BAS-AI` → **License**: choose one →
+   **SDK**: select **Docker** → **Blank** template → create.
+
+3. **Connect the code** — either link the GitHub repo (Settings →
+   *Repository sync*) or upload the files:
+   ```bash
+   git clone https://huggingface.co/spaces/<your-username>/BAS-AI
+   # copy all project files into that folder, then:
+   cd BAS-AI
+   git add . && git commit -m "BAS-AI initial deployment" && git push
+   ```
+   Required files: `app.py`, `camera.py`, `camera_worker.py`,
+   `web_camera.py`, `run_app.py`, `pose_detection.py`,
+   `object_detection.py`, `object_tracking.py`, `object_tasks.py`,
+   `task_detection.py`, `step_validator.py`, `live_task_suite.py`,
+   `task_eval.py`, `requirements.txt`, `Dockerfile`,
+   `.streamlit/config.toml`, `yolo11n.pt`, `yolo11n-pose.pt`,
+   `README.md`.
+
+4. **Wait for the build** (~5–10 min first time: CPU torch + opencv are
+   large). The Space log shows the YOLO warmup line `weights ok` before
+   the app goes live.
+
+5. **Your public URL is ready**:
+   `https://<your-username>-<space-name>.hf.space`
+   Open it on any phone or laptop → the sidebar **🔗 Share BAS-AI**
+   section shows the same URL with a **QR code** — scan it from a phone.
+
+6. **(Optional) pin the URL for the Share section** — the app
+   auto-detects its own URL from the browser, but you can hardcode it:
+   Space → **Settings** → *Variables and secrets* → add a **variable**
+   (not a secret — it is not sensitive):
+   - Name: `BASAI_PUBLIC_URL`
+   - Value: `https://<your-username>-<space-name>.hf.space`
+
+> **Status:** the deployment files are prepared and the ingest
+> pipeline is simulation-tested. The app is **not yet publicly
+> accessible** — complete steps 1–5 above, then verify per the
+> checklist below.
+
+### Using the camera from the browser (public visitors)
+
+- Camera source **🌐 Web Browser Camera** is the default on the public
+  URL (localhost keeps **Laptop Camera** by default).
+- The browser asks for **camera permission** once, over HTTPS. Denying
+  it shows a retry hint instead of breaking the app.
+- Browser frames are downscaled to 640 px and uploaded to
+  `/_basai/frame` (~12 FPS); the same YOLO pose/object pipeline,
+  tracking and task verification runs on them unchanged.
+- Users can revoke permission at any time via the browser address bar;
+  the app shows a stopped-stream warning with a retry hint.
+
+---
+
+## 🏗️ Architecture
+
+```
+Browser (HTTPS)                      Container (HF Space / Docker)
+┌─────────────────────────┐          ┌────────────────────────────────┐
+│ getUserMedia → canvas   │  JPEG    │ Starlette route POST           │
+│ → JPEG (640px, ~12fps)  │ ───────► │ /_basai/frame                  │
+└─────────────────────────┘          │   → session frame buffer       │
+                                     │        ↓                       │
+localhost: cv2.VideoCapture ───────► │ camera_worker.CameraWorker     │
+                                     │  (reader + throttled YOLO)     │
+                                     │   pose YOLO ~10fps             │
+                                     │   object YOLO ~7fps (opt-in)   │
+                                     │        ↓                       │
+                                     │ task verification + tracking   │
+                                     │        ↓                       │
+                                     │ Streamlit UI (st.App)          │
+                                     └────────────────────────────────┘
 ```
 
-### 📱 Connecting a mobile camera
+Key files:
 
-1. Install the **IP Webcam** (or DroidCam) app on your phone
-2. Phone and laptop must be on the **same Wi-Fi**
-3. Start the video stream in the app — you get an IP (e.g. `192.168.1.5:8080`)
-4. Live Monitor → **Connect with Mobile** → enter the IP + port
+| File | Role |
+|---|---|
+| `run_app.py` | production launcher: `st.App` + ingest/health routes (uvicorn) |
+| `web_camera.py` | browser capture component + session frame buffers |
+| `camera_worker.py` | single background inference worker per session |
+| `camera.py` | Live Monitor UI, camera sources, task verification |
+| `task_detection.py` / `object_tasks.py` | task logic (never fakes results) |
 
----
-
-## 🖥️ Offline Desktop Application
-
-No browser and no Python installation needed — BAS•AI runs as a native Windows desktop app.
-
-### Option A — Standalone .exe (for any Windows PC)
-
-Build it once (on a PC with Python):
+### Local production check (no Docker needed)
 
 ```bash
-pip install pywebview pyinstaller
-python build_exe.py
+pip install -r requirements.txt
+python run_app.py            # serves on PORT (default 8501) via uvicorn
+# or: uvicorn run_app:app --host 0.0.0.0 --port 8501
 ```
 
-Then share the whole `dist/BAS-AI/` folder (zip it). Double-click **BAS-AI.exe** — the dashboard opens in a native app window with both YOLO models bundled.
+---
 
-### Option B — Python launcher (developer mode)
+## 🔒 Security notes
+
+- No API keys, secrets or tokens exist in this project; `.env` /
+  `.streamlit/secrets.toml` are git-ignored and never shipped.
+- The frame-ingest route accepts only well-formed JPEG frames
+  (≤ 3 MB) and stores them per-session in memory only — frames are
+  never written to disk and never leave the container.
+- Model weights are standard public COCO/YOLO11n files.
+
+---
+
+## 🧪 Tests
 
 ```bash
-pip install pywebview
-python desktop_app.py
+python test_deployment_prep.py     # deployment readiness (this README's claims)
+python test_camera_worker.py       # worker lifecycle + throttling
+python test_task_verification.py   # pose task verification
+python test_object_tasks.py        # object task verification
+python test_walking_fix.py         # walking detection
 ```
 
-Launches the Streamlit server on a free local port and opens it in a native desktop window (falls back to the default browser if WebView2 is unavailable).
-
-> 💡 Everything works fully **offline**: AI inference (YOLO), voice alerts (pyttsx3), and the dashboard (localhost server).
-
 ---
 
-## 🧠 Activity Detection Logic
-
-| Activity | Signal | Threshold |
-|----------|--------|-----------|
-| 🚶 Walking | Body center consistently moving | movement > 4 px/frame **+** net displacement > 25 px **+** direction consistency ≥ 0.55 **+** 4-frame streak |
-| 🪑 Sitting | Knees bent | avg knee angle < 125° |
-| 🧍 Standing | Legs straight | avg knee angle ≥ 155° |
-| ❓ Unknown | Legs not clearly visible | — |
-
-**Why is Walking jitter-proof?** While standing, the body/camera has micro-jitter (2–5 px random movement). So per-frame movement alone is not enough — **net displacement** (straight start→end distance) and **direction consistency** (net ÷ total path) are also checked. In jitter, net displacement is ~0; while walking it is large. Verified with simulation tests ✓
-
----
-
-## 📊 Dashboard Pages
-
-| Page | What it shows |
-|------|---------|
-| 🏠 Dashboard | Mission overview + recent activity |
-| 📡 Live Monitor | Live video + per-person position & justification + task verification |
-| 🕒 Activity History | All detections (date/time/activity/confidence/status) |
-| 📊 Analytics | Activity distribution chart + average confidence |
-
----
-
-## 🛰️ Mission
-
-**BAS Experiment** — On-board space intelligence for crew activity monitoring during space-based experiments.
-
-**Event:** Smart India Hackathon 2026 🏆
-
----
-
-<div align="center">
-
-**BAS•AI** | ON-BOARD HUMAN ACTIVITY RECOGNITION
-
-</div>
+BAS-AI | AI-RECOGNITION-SYSTEM — SMART INDIA HACKATHON 2026

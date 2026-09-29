@@ -31,7 +31,7 @@ Walk / Move around / Walking     | Motion tracker: real net displacement +
 
 
 ============================================================
-2. OBJECT TASKS (22 supported)
+2. OBJECT TASKS (23 supported)
 ============================================================
 
 PICK / LIFT
@@ -97,6 +97,16 @@ GESTURES
 --------
   Touch the object               Hand within ~30% torso reach of it
   Point to a designated object   Straight arm extended toward the object
+
+
+CLEANING
+--------
+  Clean the workstation / Clean the designated area
+                                 Staged: COLLECT equipment (bottle/
+                                 cup/bowl/brush) -> CLEAN the marked/
+                                 table area with repeated wiping
+                                 motion -> DISPOSE/STORE it (inside a
+                                 container or stable on a surface)
 
 
 ============================================================

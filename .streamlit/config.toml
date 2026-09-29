@@ -1,0 +1,23 @@
+# BAS-AI — production/server settings
+# (localhost `streamlit run app.py` uses the same file; headless only
+#  means Streamlit does not try to auto-open a browser tab.)
+
+[server]
+# Bind all interfaces inside containers (HF Spaces / Docker).
+address = "0.0.0.0"
+port = 8501
+
+# Production: no auto browser-open, no file watcher overhead.
+headless = true
+fileWatcherType = "none"
+
+# Long-lived Streamlit websocket sessions.
+maxUploadSize = 5
+
+[browser]
+# No usage telemetry.
+gatherUsageStats = false
+
+[client]
+# Keep the chrome minimal on the public URL.
+toolbarMode = "minimal"
