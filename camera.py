@@ -26,7 +26,7 @@ from task_detection import (
     ACTION_LABELS,
 )
 
-# Dedicated Metered STUN & TURN Configuration
+# Metered Dedicated STUN & TURN Configuration
 RTC_CONFIG = RTCConfiguration(
     {
         "iceServers": [
@@ -101,7 +101,7 @@ def _prepare_object_context(texts):
 
 
 # ============================================================
-# 🎥 WEBRTC PROCESSOR FOR REAL-TIME TASK VERIFICATION
+# 🎥 WEBRTC PROCESSOR (HIGH-CONFIDENCE POSE & TASK TRACKING)
 # ============================================================
 class LiveCameraProcessor(VideoProcessorBase):
     def __init__(self):
@@ -125,7 +125,7 @@ class LiveCameraProcessor(VideoProcessorBase):
             "detected": False,
             "confidence": 0.0,
             "streak": 0,
-            "required_frames": 10,
+            "required_frames": 12,
             "progress": 0.0,
             "reasons": [],
         }
@@ -134,13 +134,13 @@ class LiveCameraProcessor(VideoProcessorBase):
         try:
             img = frame.to_ndarray(format="bgr24")
 
-            # Cloud processing optimization
+            # Standard 640px width ensures high accuracy for MediaPipe landmarks
             h, w = img.shape[:2]
-            if w > 480:
-                scale = 480.0 / w
-                img = cv2.resize(img, (480, int(h * scale)))
+            if w > 640:
+                scale = 640.0 / w
+                img = cv2.resize(img, (640, int(h * scale)))
 
-            # 1. Pose Analysis
+            # 1. AI Pose Estimation
             detected_frame, persons = analyze_frame(img)
             self.persons = persons or []
 
@@ -149,7 +149,7 @@ class LiveCameraProcessor(VideoProcessorBase):
             self.object_count = len(objects)
             detected_frame = draw_object_boxes(detected_frame, objects)
 
-            # 3. Pose Evaluation
+            # 3. Person Activity & Confidence
             if self.persons:
                 main_p = self.persons[0]
                 self.latest_activity = main_p.get("activity", "Unknown")
@@ -164,7 +164,7 @@ class LiveCameraProcessor(VideoProcessorBase):
                 self.step_status = "WAITING"
                 self.step_message = "No person detected in frame."
 
-            # 4. Live Verification Pipeline
+            # 4. Sequential 12-Frame Task Verification Execution
             if self.task_session is not None:
                 try:
                     res = verify_task_step(
@@ -192,7 +192,7 @@ class LiveCameraProcessor(VideoProcessorBase):
 
 
 # ============================================================
-# 📡 EXACT UI IMPLEMENTATION (LIVE MONITOR + TASK VERIFICATION)
+# 📡 EXACT SCREENSHOT UI + REAL-TIME AUTO-UPDATING PIPELINE
 # ============================================================
 def show_task_verification():
     st.markdown("## 📡 Live Monitor")
@@ -212,7 +212,7 @@ def show_task_verification():
     if task_type == "Single Task":
         task_text = st.text_input(
             "Enter Task",
-            value=st.session_state.get("tv_single_text", ""),
+            value=st.session_state.get("tv_single_text", "Raise your right hand"),
             placeholder="Example: Raise your right hand",
             key="tv_single_input",
         )
@@ -243,7 +243,7 @@ def show_task_verification():
                 st.session_state.tv_multi_step_count = max(2, count - 1)
                 st.rerun()
 
-    # 2. Camera Source Selection
+    # 2. Camera Source
     st.markdown("### 📷 Camera Source")
     camera_source = st.radio(
         "Select Camera Source",
@@ -259,11 +259,10 @@ def show_task_verification():
             placeholder="e.g. 192.168.1.5",
         )
 
-    # State management for camera toggle
     if "tv_cam_started" not in st.session_state:
         st.session_state.tv_cam_started = False
 
-    # 3. Start Camera Toggle Button
+    # 3. Camera Start/Stop Toggle
     if not st.session_state.tv_cam_started:
         if st.button("📷 START CAMERA", use_container_width=True, type="primary"):
             st.session_state.tv_cam_started = True
@@ -273,7 +272,7 @@ def show_task_verification():
             st.session_state.tv_cam_started = False
             st.rerun()
 
-    # 4. Action Buttons Row
+    # 4. Action Buttons
     col_start, col_reset, col_clear = st.columns(3)
     with col_start:
         start_task = st.button(
@@ -290,13 +289,13 @@ def show_task_verification():
         st.session_state.task_session = TaskVerificationSession(task_texts)
         _prepare_object_context(task_texts)
         reset_tracker()
-        st.success("Task verification loaded! Perform the action in front of the camera.")
+        st.success("Target task loaded into AI pipeline! Perform action in front of the camera.")
 
     if reset_task:
         if st.session_state.get("task_session"):
             st.session_state.task_session.reset()
         reset_tracker()
-        st.info("Task reset.")
+        st.info("Task progress reset.")
 
     if clear_task:
         st.session_state.task_session = None
@@ -310,7 +309,6 @@ def show_task_verification():
         st.info("⚪ Camera stopped — press 📷 START CAMERA above to begin continuous monitoring.")
     else:
         st.divider()
-        st.caption("Live video stream connected. Allow browser camera permissions if prompted.")
 
         ctx = webrtc_streamer(
             key="webrtc-exact-monitor",
@@ -319,8 +317,8 @@ def show_task_verification():
             rtc_configuration=RTC_CONFIG,
             media_stream_constraints={
                 "video": {
-                    "width": {"ideal": 480},
-                    "height": {"ideal": 360},
+                    "width": {"ideal": 640},
+                    "height": {"ideal": 480},
                     "frameRate": {"ideal": 15, "max": 20},
                 },
                 "audio": False,
@@ -330,72 +328,68 @@ def show_task_verification():
 
         st.divider()
 
-        # Real-time Metrics and AI Justification
-        m1, m2, m3, m4 = st.columns(4)
-        with m1:
-            act_box = st.empty()
-        with m2:
-            conf_box = st.empty()
-        with m3:
-            streak_box = st.empty()
-        with m4:
-            sys_box = st.empty()
+        # 6. Real-Time Metric & Task Evaluation Fragment (Refreshes every 0.25s)
+        @st.fragment(run_every="0.25s")
+        def _render_live_verification_metrics():
+            if ctx.video_processor:
+                proc = ctx.video_processor
 
-        st.markdown("#### 🎯 Verification Progress")
-        task_status_container = st.empty()
-        progress_bar = st.empty()
-        reasoning_container = st.empty()
+                # Sync active session directly into background WebRTC thread
+                proc.task_session = st.session_state.get("task_session")
+                proc.object_context = st.session_state.get("tv_object_context")
 
-        if ctx.video_processor:
-            proc = ctx.video_processor
-            proc.task_session = st.session_state.get("task_session")
-            proc.object_context = st.session_state.get("tv_object_context")
+                m1, m2, m3, m4 = st.columns(4)
+                with m1:
+                    m1.metric("Activity", proc.latest_activity)
+                with m2:
+                    m2.metric("Confidence", f"{proc.latest_confidence:.1f}%")
+                with m3:
+                    res = proc.task_result
+                    req_frames = max(1, res.get("required_frames", 12))
+                    cur_streak = res.get("streak", 0)
+                    m3.metric("Confirmation", f"{cur_streak}/{req_frames}")
+                with m4:
+                    m4.metric("System", "ONLINE 🟢" if ctx.state.playing else "CONNECTING 🟡")
 
-            act_box.metric("Activity", proc.latest_activity)
-            conf_box.metric("Confidence", f"{proc.latest_confidence:.1f}%")
-            sys_box.metric("System", "ONLINE 🟢" if ctx.state.playing else "PAUSED")
+                st.markdown("#### 🎯 Verification Progress")
 
-            res = proc.task_result
-            req_frames = max(1, res.get("required_frames", 10))
-            cur_streak = res.get("streak", 0)
-            streak_box.metric("Confirmation", f"{cur_streak}/{req_frames}")
+                progress_val = float(res.get("progress", 0.0))
+                st.progress(max(0.0, min(1.0, progress_val)))
 
-            progress_val = float(res.get("progress", 0.0))
-            progress_bar.progress(max(0.0, min(1.0, progress_val)))
-
-            if res.get("all_completed"):
-                task_status_container.success("🎉 ALL TASKS COMPLETED!")
-            elif res.get("step_completed"):
-                task_status_container.success(
-                    f"✓ Step {res.get('completed_step_number')} COMPLETED"
-                )
-            elif res.get("current_step"):
-                if res.get("detected"):
-                    task_status_container.warning(
-                        f"● IN PROGRESS — action detected! ({cur_streak}/{req_frames} frames)"
+                if res.get("all_completed"):
+                    st.success("🎉 ALL TASKS COMPLETED!")
+                elif res.get("step_completed"):
+                    st.success(
+                        f"✓ Step {res.get('completed_step_number')} COMPLETED! Moving to next step..."
                     )
+                elif res.get("current_step"):
+                    if res.get("detected"):
+                        st.warning(
+                            f"● IN PROGRESS — action detected! ({cur_streak}/{req_frames} frames) — Hold pose!"
+                        )
+                    else:
+                        st.info(
+                            f"● IN PROGRESS — perform the action: **{res.get('current_step')}**"
+                        )
                 else:
-                    task_status_container.info(
-                        f"● IN PROGRESS — perform the action: **{res.get('current_step')}**"
-                    )
+                    if st.session_state.get("task_session"):
+                        st.info("● WAITING FOR PERSON")
+                    else:
+                        st.info("Enter task above and click 🎯 Start / Verify Task.")
+
+                reasons = res.get("reasons", [])
+                if reasons:
+                    with st.expander("🧠 Why this status? (AI reasoning)", expanded=True):
+                        for r in reasons[:4]:
+                            st.write(f"• {r}")
             else:
-                if st.session_state.get("task_session"):
-                    task_status_container.info("● WAITING FOR PERSON")
-                else:
-                    task_status_container.info(
-                        "Enter task above and click 🎯 Start / Verify Task."
-                    )
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Activity", "—")
+                m2.metric("Confidence", "—")
+                m3.metric("Confirmation", "—")
+                m4.metric("System", "CONNECTING 🟡")
 
-            reasons = res.get("reasons", [])
-            if reasons:
-                with reasoning_container.expander("🧠 Why this status? (AI reasoning)", expanded=True):
-                    for r in reasons[:4]:
-                        st.write(f"• {r}")
-        else:
-            sys_box.metric("System", "CONNECTING 🟡")
-            act_box.metric("Activity", "—")
-            conf_box.metric("Confidence", "—")
-            streak_box.metric("Confirmation", "—")
+        _render_live_verification_metrics()
 
 
 def show_camera():
