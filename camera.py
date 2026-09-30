@@ -28,7 +28,7 @@ from task_detection import (
 from task_eval import LiveTaskEvaluator, build_report
 
 
-# --- Safe Voice Alert (Cloud Crash Fix) ---
+# --- Safe Voice Alert (Linux / Cloud Safe) ---
 def get_voice_engine():
     try:
         engine = pyttsx3.init()
@@ -46,13 +46,13 @@ def speak_alert(message):
                 engine.say(message)
                 engine.runAndWait()
                 engine.stop()
-        except Exception as e:
-            print("Voice alert error:", e)
+        except Exception:
+            pass
 
     threading.Thread(target=_speak, daemon=True).start()
 
 
-# --- Functions ---
+# --- Parsing & Context Helpers ---
 def _parse_any(text):
     action = parse_task_text(text)
     if action is not None:
@@ -124,7 +124,6 @@ def _prepare_object_context(texts):
 
 
 OBJECT_BOX_COLOR = (0, 200, 255)
-TV_BATCH_FRAMES = 5
 
 
 def draw_object_boxes(frame, objects):
@@ -145,36 +144,34 @@ def draw_object_boxes(frame, objects):
 
 
 # ============================================================
-# 📷 1. MAIN CAMERA / VIDEO PROCESSING (CLOUD COMPATIBLE)
+# 📷 1. SHOW CAMERA
 # ============================================================
 def show_camera():
     st.subheader("📷 Camera / Video Source")
 
     camera_type = st.radio(
         "Select Source",
-        ["Upload Video File (Recommended for Cloud)", "Laptop Camera (Local)", "Connect with Mobile (Local WiFi)"],
-        horizontal=True
+        ["Upload Video File (Cloud Compatible)", "Laptop Camera (Local)", "Connect with Mobile"],
+        horizontal=True,
+        key="main_cam_type"
     )
 
     uploaded_video = None
-    if camera_type == "Upload Video File (Recommended for Cloud)":
+    if camera_type == "Upload Video File (Cloud Compatible)":
         uploaded_video = st.file_uploader(
-            "Upload recorded video or shoot from phone (.mp4, .mov, .avi)", 
-            type=["mp4", "mov", "avi", "mkv"]
+            "Upload recorded video (.mp4, .mov, .avi)", 
+            type=["mp4", "mov", "avi", "mkv"],
+            key="main_cam_uploader"
         )
 
     col1, col2 = st.columns(2)
     with col1:
-        start_camera = st.button("🟢 Start Processing", use_container_width=True)
+        start_camera = st.button("🟢 Start Processing", use_container_width=True, key="main_cam_start")
     with col2:
-        stop_camera = st.button("🔴 Stop", use_container_width=True)
+        stop_camera = st.button("🔴 Stop", use_container_width=True, key="main_cam_stop")
 
     if "camera_running" not in st.session_state:
         st.session_state.camera_running = False
-    if "activity_stream" not in st.session_state:
-        st.session_state.activity_stream = []
-    if "activity_history" not in st.session_state:
-        st.session_state.activity_history = []
 
     if stop_camera:
         st.session_state.camera_running = False
@@ -182,48 +179,22 @@ def show_camera():
         st.rerun()
 
     if start_camera:
-        if camera_type == "Upload Video File (Recommended for Cloud)" and uploaded_video is None:
-            st.error("⚠️ Pehle video file upload karein ya phone se record karein.")
+        if camera_type == "Upload Video File (Cloud Compatible)" and uploaded_video is None:
+            st.error("⚠️ Please upload a video file first.")
             return
         st.session_state.camera_running = True
         st.session_state.system_status = "ONLINE"
 
     if not st.session_state.camera_running:
-        st.info("Source chunein aur 🟢 Start Processing par click karein.")
+        st.info("Select a source and press 🟢 Start Processing.")
         return
 
     frame_placeholder = st.empty()
-    st.divider()
+    activity_metric = st.empty()
 
-    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
-    with metric_col1: activity_metric = st.empty()
-    with metric_col2: confidence_metric = st.empty()
-    with metric_col3: system_metric = st.empty()
-    with metric_col4: objects_metric = st.empty()
-
-    st.subheader("Current AI Detection")
-    progress_placeholder = st.empty()
-    detection_placeholder = st.empty()
-
-    st.subheader("🎯 Sequential Step Evaluation")
-    step_col1, step_col2, step_col3 = st.columns(3)
-    with step_col1: current_step_placeholder = st.empty()
-    with step_col2: step_status_placeholder = st.empty()
-    with step_col3: step_message_placeholder = st.empty()
-
-    st.subheader("📦 Objects in Frame")
-    objects_placeholder = st.empty()
-
-    st.subheader("👤 Person Position & Justification")
-    analysis_placeholder = st.empty()
-
-    st.subheader("Live Activity Stream")
-    stream_placeholder = st.empty()
-
-    # Capture open logic
-    if camera_type == "Upload Video File (Recommended for Cloud)":
+    if camera_type == "Upload Video File (Cloud Compatible)":
         tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-        tfile.write(uploaded_video.read())
+        tfile.write(uploaded_video.getvalue())
         cap = cv2.VideoCapture(tfile.name)
     elif camera_type == "Laptop Camera (Local)":
         cap = cv2.VideoCapture(0)
@@ -232,80 +203,18 @@ def show_camera():
         cap = cv2.VideoCapture(f"http://{mobile_ip}:8080/video")
 
     if not cap.isOpened():
-        system_metric.metric("System", "OFFLINE")
-        st.error("❌ Video/Camera could not be opened.")
+        st.error("❌ Could not open video/camera stream.")
         st.session_state.camera_running = False
         return
-
-    last_log_time = 0
-    voice_engine = get_voice_engine()
-    last_voice_time = 0
-    frame_count = 0
 
     while st.session_state.camera_running:
         ret, frame = cap.read()
         if not ret:
-            st.info("ℹ️ Video processing complete.")
+            st.info("ℹ️ Video finished.")
             break
-
         detected_frame, persons = analyze_frame(frame)
         _, objects = detect_objects(frame)
         detected_frame = draw_object_boxes(detected_frame, objects)
-        frame_count += 1
-
-        if persons:
-            main_person = persons[0]
-            activity = main_person["activity"]
-            confidence = main_person["confidence"]
-        else:
-            activity = "No Person"
-            confidence = 0.0
-
-        if "step_validator" not in st.session_state:
-            st.session_state.step_validator = StepValidator()
-        validator = st.session_state.step_validator
-
-        if activity != "No Person":
-            result = validator.check_activity(activity)
-            st.session_state.step_status = result["status"]
-            st.session_state.step_message = result["message"]
-            if result["status"] == "WRONG" and voice_engine:
-                now = time.time()
-                if now - last_voice_time >= 3:
-                    try:
-                        voice_engine.say(result["message"])
-                        voice_engine.runAndWait()
-                    except Exception:
-                        pass
-                    last_voice_time = now
-        else:
-            st.session_state.step_status = "WAITING"
-            st.session_state.step_message = "Person not detected."
-
-        current_step = validator.get_current_step()
-        current_step_placeholder.metric("Current Step", "🎉 COMPLETED" if current_step is None else current_step)
-
-        if st.session_state.step_status == "CORRECT": step_status_placeholder.success("✅ CORRECT")
-        elif st.session_state.step_status == "WRONG": step_status_placeholder.error("❌ WRONG")
-        elif st.session_state.step_status == "COMPLETED": step_status_placeholder.success("🎉 COMPLETED")
-        else: step_status_placeholder.info("⏳ WAITING")
-
-        step_message_placeholder.write(st.session_state.step_message)
-        activity_metric.metric("Current Activity", activity)
-        confidence_metric.metric("Confidence", f"{confidence:.1f}%")
-        system_metric.metric("System", "ONLINE")
-        objects_metric.metric("Objects", len(objects))
-        progress_placeholder.progress(max(0.0, min(1.0, confidence / 100)))
-
-        # Justification
-        if persons:
-            analysis_blocks = []
-            for p in persons:
-                reasons_text = "\n".join(f"   • {reason}" for reason in p["justification"])
-                pos = p["position"]
-                analysis_blocks.append(f"**👤 Person ID {p['track_id']}** — `{p['activity']}` ({p['confidence']:.0f}%)\n\n- **Position:** {pos['description']}\n- **Justification:**\n{reasons_text}")
-            analysis_placeholder.markdown("\n\n---\n\n".join(analysis_blocks))
-
         frame_placeholder.image(cv2.cvtColor(detected_frame, cv2.COLOR_BGR2RGB), channels="RGB", use_container_width=True)
         time.sleep(0.02)
 
@@ -314,137 +223,15 @@ def show_camera():
 
 
 # ============================================================
-# 📝 2. LIVE TASK EVALUATION (CLOUD COMPATIBLE)
+# 📝 2. TASK EVALUATION
 # ============================================================
 def show_task_evaluation():
-    st.subheader("📝 Task")
-    task = st.text_area(
-        "What should the person do?",
-        placeholder="Example: Pick up the bottle and place it on the table",
-        key="task_eval_input"
-    )
-
-    if task.strip():
-        from task_eval import parse_task
-        preview = parse_task(task)
-        p1, p2, p3 = st.columns(3)
-        with p1: st.metric("Activities", ", ".join(preview["activities"]) or "None")
-        with p2: st.metric("Objects", ", ".join(preview["objects"]) or "None")
-        with p3: st.metric("Interaction", "Required" if preview["interaction_required"] else "Optional")
-
-    st.subheader("📷 Video / Camera Source")
-    camera_type = st.radio(
-        "Select Source",
-        ["Upload Video File (Cloud)", "Laptop Camera (Local)"],
-        horizontal=True,
-        key="task_eval_camera_type"
-    )
-
-    uploaded_eval_vid = None
-    if camera_type == "Upload Video File (Cloud)":
-        uploaded_eval_vid = st.file_uploader(
-            "Upload task video (.mp4, .mov, .avi)", 
-            type=["mp4", "mov", "avi"],
-            key="task_eval_upload"
-        )
-
-    if "task_eval_running" not in st.session_state:
-        st.session_state.task_eval_running = False
-    if "task_evaluator" not in st.session_state:
-        st.session_state.task_evaluator = None
-    if "task_eval_verdict" not in st.session_state:
-        st.session_state.task_eval_verdict = None
-
-    col1, col2 = st.columns(2)
-    with col1:
-        start_eval = st.button("🟢 Start Task Evaluation", use_container_width=True, disabled=not task.strip())
-    with col2:
-        stop_eval = st.button("🔴 Stop & Get Verdict", use_container_width=True)
-
-    if start_eval:
-        st.session_state.task_evaluator = LiveTaskEvaluator(task)
-        st.session_state.task_eval_verdict = None
-        st.session_state.task_eval_running = True
-        st.rerun()
-
-    if stop_eval and st.session_state.task_eval_running:
-        st.session_state.task_eval_running = False
-        evaluator = st.session_state.task_evaluator
-        if evaluator is not None and evaluator.frames_processed > 0:
-            st.session_state.task_eval_verdict = evaluator.evaluate()
-
-    if not st.session_state.task_eval_running and st.session_state.task_eval_verdict is not None:
-        _show_verdict(st.session_state.task_eval_verdict, st.session_state.task_evaluator)
-        return
-
-    if st.session_state.task_eval_running:
-        evaluator = st.session_state.task_evaluator
-        if camera_type == "Upload Video File (Cloud)":
-            if uploaded_eval_vid is None:
-                st.error("❌ Please upload a video file first.")
-                st.session_state.task_eval_running = False
-                return
-            tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-            tfile.write(uploaded_eval_vid.read())
-            cap = cv2.VideoCapture(tfile.name)
-        else:
-            cap = cv2.VideoCapture(0)
-
-        if not cap.isOpened():
-            st.error("❌ Video/Camera could not be opened.")
-            st.session_state.task_eval_running = False
-            return
-
-        frame_placeholder = st.empty()
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-
-        completed_automatically = False
-        while st.session_state.task_eval_running:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            annotated, status = evaluator.step(frame)
-            frame_placeholder.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), channels="RGB", use_container_width=True)
-            progress_value = evaluator.progress()
-            progress_bar.progress(progress_value)
-            status_text.write(f"**{status}** — {progress_value * 100:.0f}%")
-            if evaluator.finished:
-                completed_automatically = True
-                break
-
-        cap.release()
-        st.session_state.task_eval_running = False
-        if evaluator.frames_processed > 0:
-            st.session_state.task_eval_verdict = evaluator.evaluate()
-        st.rerun()
-
-
-def _checklist_markdown(evaluator):
-    lines = []
-    for check in evaluator.verdict_checklist():
-        state = check["state"]
-        icon = "✅" if state in ("confirmed", "interacted") else ("⚠️" if state == "seen" else "⬜")
-        label = check.get("activity") or check.get("object")
-        lines.append(f"{icon} **{label}**")
-    return "\n\n".join(lines) or "_No requirements._"
-
-
-def _show_verdict(verdict, evaluator):
-    st.divider()
-    st.header("📊 Task Verdict")
-    c1, c2, c3 = st.columns(3)
-    with c1: st.metric("Score", f"{verdict['score']}%")
-    with c2: st.metric("Progress", f"{verdict['progress'] * 100:.0f}%")
-    with c3: st.metric("Frames Analyzed", verdict["stats"]["frames_processed"])
-
-    if verdict["status"] == "TASK COMPLETED": st.success("✅ " + verdict["status"])
-    else: st.info("ℹ️ " + verdict["status"])
-    st.write(verdict["explanation"])
+    st.subheader("📝 Task Evaluation")
+    st.info("Use the Task Verification section below to run real-time evaluation.")
 
 
 # ============================================================
-# ✅ 3. TASK VERIFICATION
+# ✅ 3. MAIN LIVE MONITOR: TASK VERIFICATION (FULL RESTORED)
 # ============================================================
 def _apply_capture_profile(cap):
     try:
@@ -456,12 +243,26 @@ def _apply_capture_profile(cap):
 
 
 def _task_camera(cap_type):
-    if cap_type == "Laptop Camera":
-        cap = cv2.VideoCapture(0)
+    if cap_type == "Upload Video File (Cloud Compatible)":
+        up_file = st.session_state.get("tv_uploaded_file")
+        if up_file is None:
+            return None
+        tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+        tfile.write(up_file.getvalue())
+        tfile.flush()
+        cap = cv2.VideoCapture(tfile.name)
+    elif cap_type == "Laptop Camera":
+        if sys.platform == "win32":
+            cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+            if not cap.isOpened():
+                cap = cv2.VideoCapture(0)
+        else:
+            cap = cv2.VideoCapture(0)
     else:
         mobile_ip = st.session_state.get("tv_mobile_ip", "")
         port = int(st.session_state.get("tv_port", 8080))
-        if not mobile_ip: return None
+        if not mobile_ip:
+            return None
         cap = cv2.VideoCapture(f"http://{mobile_ip}:{port}/video")
 
     if cap is not None and cap.isOpened():
@@ -470,6 +271,291 @@ def _task_camera(cap_type):
     return None
 
 
+def _render_task_status(task_session, result, object_context=None):
+    if result["all_completed"]:
+        st.success("🎉 ALL TASKS COMPLETED")
+    elif result["current_step"]:
+        st.markdown(f"**CURRENT TASK**\n\n**{result['current_step']}**")
+
+    if result["all_completed"]:
+        st.success("✓ TASK COMPLETED")
+    elif result["step_completed"]:
+        st.success(f"✓ Step {result['completed_step_number']} COMPLETED")
+    elif result["current_step"] is None:
+        st.info("ℹ️ Start a task to begin verification.")
+    elif result["state"] == "IN PROGRESS":
+        if result["detected"]:
+            st.warning(f"● IN PROGRESS — action detected! ({result['streak']}/{result['required_frames']} frames)")
+        elif result["streak"] > 0:
+            st.warning(f"● IN PROGRESS — hold pose ({result['streak']}/{result['required_frames']} frames)")
+        else:
+            st.info("● IN PROGRESS — perform the action now")
+    else:
+        st.info("● WAITING FOR PERSON")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("Live Confidence", f"{result['confidence']:.1f}%")
+    with c2:
+        st.metric("Confirmation", f"{result['streak']}/{result['required_frames']}")
+
+    st.progress(max(0.0, min(1.0, result["streak"] / max(1, result["required_frames"]))))
+
+    with st.expander("🧠 Why this status? (AI reasoning)"):
+        for reason in result["reasons"][:5]:
+            st.caption(f"• {reason}")
+
+    if task_session is not None and task_session.mode == "multi":
+        st.subheader("TASK PROGRESS")
+        for step in task_session.steps_view():
+            if step["state"] == "COMPLETED":
+                st.success(f"✓ Step {step['number']} — {step['text']} ({step['confidence']:.0f}%)")
+            elif step["state"] == "IN PROGRESS":
+                st.warning(f"→ Step {step['number']} — {step['text']} — IN PROGRESS")
+            else:
+                st.info(f"○ Step {step['number']} — {step['text']} — LOCKED")
+
+
 def show_task_verification():
     st.subheader("✅ Task Verification")
-    st.info("Task verification is active. Use Laptop Camera or Connect with Mobile locally, or use Task Evaluation tab above for Uploaded Video.")
+
+    if "task_history" not in st.session_state:
+        st.session_state.task_history = []
+
+    if st.session_state.pop("tv_camera_lost", False):
+        st.error("❌ Video/Camera stopped sending frames. Press START CAMERA to run again.")
+
+    # 1. Task Type Input
+    task_type = st.radio("Task Type", ["Single Task", "Multi-Step Task"], horizontal=True, key="tv_task_type")
+    task_texts = []
+
+    if task_type == "Single Task":
+        task_text = st.text_input(
+            "Enter Task",
+            value=st.session_state.get("tv_single_text", "Raise your right hand"),
+            key="tv_single_input"
+        )
+        st.session_state.tv_single_text = task_text
+        if task_text.strip():
+            task_texts.append(task_text)
+            kind, key, label, detail = _parse_any(task_text)
+            if kind == "pose":
+                st.success(f"🤖 AI understood: **{label}** (pose task)")
+            elif kind == "object":
+                st.success(f"🤖 AI understood: **{label}** (object task)")
+    else:
+        if "tv_step_count" not in st.session_state:
+            st.session_state.tv_step_count = 2
+        step_count = st.session_state.tv_step_count
+
+        for i in range(step_count):
+            task_texts.append(
+                st.text_input(
+                    f"Step {i + 1}",
+                    value=st.session_state.get(f"tv_step_{i}", "Stand up" if i == 0 else "Raise your right hand"),
+                    key=f"tv_step_input_{i}"
+                )
+            )
+
+        add_col, remove_col = st.columns(2)
+        with add_col:
+            if st.button("＋ Add Step", use_container_width=True):
+                st.session_state.tv_step_count = min(8, step_count + 1)
+                st.rerun()
+        with remove_col:
+            if st.button("－ Remove Step", use_container_width=True):
+                st.session_state.tv_step_count = max(2, step_count - 1)
+                st.rerun()
+
+    st.session_state.tv_steps_text = task_texts
+
+    # 2. Source Selection (Cloud Compatible Video Upload added)
+    st.subheader("📷 Camera / Video Source")
+    camera_type = st.radio(
+        "Select Source",
+        ["Upload Video File (Cloud Compatible)", "Laptop Camera", "Connect with Mobile"],
+        horizontal=True,
+        key="tv_camera_type"
+    )
+
+    if camera_type == "Upload Video File (Cloud Compatible)":
+        st.file_uploader(
+            "Upload action video or shoot from phone (.mp4, .mov)", 
+            type=["mp4", "mov", "avi", "mkv"],
+            key="tv_uploaded_file"
+        )
+    elif camera_type == "Connect with Mobile":
+        st.session_state.tv_mobile_ip = st.text_input("Mobile IP Address", value=st.session_state.get("tv_mobile_ip", ""), placeholder="192.168.1.5")
+        st.session_state.tv_port = st.number_input("Port", value=int(st.session_state.get("tv_port", 8080)))
+
+    # 3. Action Buttons
+    if "tv_cam_on" not in st.session_state:
+        st.session_state.tv_cam_on = False
+
+    cam_col, _ = st.columns([1, 2])
+    with cam_col:
+        if not st.session_state.tv_cam_on:
+            start_cam_pressed = st.button("📷 START PROCESSING", use_container_width=True, type="primary", key="tv_cam_start_btn")
+            stop_cam_pressed = False
+        else:
+            start_cam_pressed = False
+            stop_cam_pressed = st.button("⏹️ STOP PROCESSING", use_container_width=True, key="tv_cam_stop_btn")
+
+    if start_cam_pressed:
+        if camera_type == "Upload Video File (Cloud Compatible)" and st.session_state.get("tv_uploaded_file") is None:
+            st.error("⚠️ Pehle video upload karein.")
+        else:
+            st.session_state.tv_cam_on = True
+            st.session_state.task_session = None
+            reset_tracker()
+            st.rerun()
+
+    if stop_cam_pressed:
+        st.session_state.tv_cam_on = False
+        release_task_camera()
+        st.session_state.tv_running = False
+        st.session_state.task_session = None
+        st.rerun()
+
+    btn_col1, btn_col2, btn_col3 = st.columns(3)
+    with btn_col1:
+        start_pressed = st.button("🎯 Start / Verify Task", use_container_width=True, type="primary", disabled=not any(t.strip() for t in task_texts))
+    with btn_col2:
+        reset_pressed = st.button("🔄 Reset Task", use_container_width=True)
+    with btn_col3:
+        clear_pressed = st.button("🧹 CLEAR TASK", use_container_width=True)
+
+    if start_pressed:
+        texts = [t.strip() for t in task_texts if t.strip()]
+        st.session_state.task_session = TaskVerificationSession(texts)
+        st.session_state.tv_running = True
+        _prepare_object_context(texts)
+        st.rerun()
+
+    if clear_pressed:
+        st.session_state.task_session = None
+        st.session_state.tv_running = False
+        st.rerun()
+
+    if reset_pressed and st.session_state.get("task_session") is not None:
+        st.session_state.task_session.reset()
+        st.session_state.tv_running = True
+        st.rerun()
+
+    if not st.session_state.tv_cam_on:
+        st.info("⚪ Press **📷 START PROCESSING** above to begin continuous AI monitoring.")
+        return
+
+    # Layout for Running State
+    main_col, status_col = st.columns([2, 1])
+    with status_col:
+        status_placeholder = st.empty()
+    with main_col:
+        frame_placeholder = st.empty()
+        m1, m2, m3 = st.columns(3)
+        with m1: activity_metric = st.empty()
+        with m2: streak_metric = st.empty()
+        with m3: progress_metric = st.empty()
+        detection_placeholder = st.empty()
+
+    status_placeholder.info("Processing: ⚪ starting…")
+    frame_placeholder.info("Waiting for video frames…")
+    activity_metric.metric("Activity", "—")
+    streak_metric.metric("Confirmation", "—")
+    progress_metric.metric("Progress", "0%")
+    detection_placeholder.info("🤖 AI engine running…")
+
+    @st.fragment(run_every="0.25s")
+    def _tv_live_fragment():
+        _tv_render_live_frame(
+            status_placeholder, frame_placeholder,
+            activity_metric, streak_metric,
+            progress_metric, detection_placeholder,
+        )
+
+    _tv_live_fragment()
+
+
+def _tv_open_camera(camera_kind):
+    return _task_camera(camera_kind)
+
+
+def _tv_render_live_frame(
+    status_placeholder, frame_placeholder,
+    activity_metric, streak_metric,
+    progress_metric, detection_placeholder,
+):
+    worker = CameraWorker.get_active()
+    camera_kind = st.session_state.get("tv_camera_type", "Upload Video File (Cloud Compatible)")
+
+    if worker is None:
+        cap = st.session_state.get("tv_cap")
+        if cap is None or not cap.isOpened() or st.session_state.get("tv_cap_kind") != camera_kind:
+            if cap is not None:
+                try: cap.release()
+                except Exception: pass
+            cap = _tv_open_camera(camera_kind)
+            if cap is None:
+                status_placeholder.error("❌ Video/Camera could not be opened.")
+                return
+            st.session_state.tv_cap = cap
+            st.session_state.tv_cap_kind = camera_kind
+            reset_tracker()
+
+        worker, _started = start_worker(cap, camera_kind, on_camera_lost=_tv_on_camera_lost)
+
+    shared = worker._shared
+    shared.task_session = st.session_state.get("task_session")
+    shared.object_context = st.session_state.get("tv_object_context")
+    shared.marked_location = st.session_state.get("tv_marked_location")
+
+    if not shared.running or shared.camera_lost:
+        release_task_camera()
+        st.session_state.tv_running = False
+        st.session_state.tv_camera_lost = True
+        st.rerun(scope="fragment")
+
+    snapshot = shared.latest()
+    if snapshot is None:
+        status_placeholder.success("Processing: 🟢 STARTING...")
+        return
+
+    annotated = snapshot["annotated"]
+    persons = snapshot["persons"]
+    result = snapshot["task_result"]
+
+    try:
+        frame_placeholder.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), channels="RGB", use_container_width=True)
+    except Exception:
+        return
+
+    status_placeholder.success("Processing: 🟢 LIVE")
+    if persons:
+        activity_metric.metric("Activity", persons[0]["activity"])
+    else:
+        activity_metric.metric("Activity", "No Person")
+
+    streak_metric.metric("Confirmation", f"{result['streak']}/{result['required_frames']}")
+    progress_metric.metric("Progress", f"{int(result['progress'] * 100)}%")
+
+    if result["step_completed"]:
+        detection_placeholder.success(f"✓ Step {result['completed_step_number']} COMPLETED!")
+    elif result["detected"]:
+        detection_placeholder.warning("🟢 Action detected — hold steady!")
+    else:
+        reason = result["reasons"][0] if result["reasons"] else "perform the step."
+        detection_placeholder.info(f"🤖 {reason}")
+
+    task_session = st.session_state.get("task_session")
+    if task_session is not None:
+        _render_task_status(task_session, result, shared.object_context)
+
+
+def _tv_on_camera_lost():
+    print("[camera_worker] stream ended")
+
+
+def release_task_camera():
+    stop_active_worker()
+    st.session_state.pop("tv_cap", None)
+    st.session_state.pop("tv_cap_kind", None)
