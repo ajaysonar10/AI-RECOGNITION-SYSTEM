@@ -25,26 +25,19 @@ from task_detection import (
     ACTION_LABELS,
 )
 
-# STUN + Free OpenRelay TURN servers for firewall and mobile CGNAT bypass
+# Metered Dedicated TURN/STUN Configuration
 RTC_CONFIG = RTCConfiguration(
     {
         "iceServers": [
-            {"urls": ["stun:stun.l.google.com:19302"]},
-            {"urls": ["stun:stun1.l.google.com:19302"]},
+            {"urls": ["stun:stun.relay.metered.ca:80"]},
             {
-                "urls": ["turn:openrelay.metered.ca:80"],
-                "username": "openrelayproject",
-                "credential": "openrelayproject",
-            },
-            {
-                "urls": ["turn:openrelay.metered.ca:443"],
-                "username": "openrelayproject",
-                "credential": "openrelayproject",
-            },
-            {
-                "urls": ["turn:openrelay.metered.ca:443?transport=tcp"],
-                "username": "openrelayproject",
-                "credential": "openrelayproject",
+                "urls": [
+                    "turn:standard.relay.metered.ca:80",
+                    "turn:standard.relay.metered.ca:443",
+                    "turn:standard.relay.metered.ca:443?transport=tcp",
+                ],
+                "username": "1b4e30c55c4f585a09221da6",
+                "credential": "rkYnm4VLtnSbdoqx",
             },
         ]
     }
@@ -92,7 +85,7 @@ class LiveCameraProcessor(VideoProcessorBase):
         try:
             img = frame.to_ndarray(format="bgr24")
 
-            # Optimize resolution for cloud performance
+            # Optimization for cloud processing stability
             h, w = img.shape[:2]
             if w > 480:
                 scale = 480.0 / w
@@ -143,7 +136,7 @@ def show_camera():
 
     if source_type == "Live Device Camera (WebRTC)":
         st.caption(
-            "Click **START** below. When prompted, select **Allow** for browser camera permissions."
+            "Click **START** below. When prompted by your browser, click **Allow** to enable camera access."
         )
 
         ctx = webrtc_streamer(
