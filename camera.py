@@ -7,7 +7,12 @@ from datetime import datetime
 import tempfile
 import os
 import av
-from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
+from streamlit_webrtc import (
+    webrtc_streamer,
+    VideoProcessorBase,
+    RTCConfiguration,
+    WebRtcMode,
+)
 
 from pose_detection import analyze_frame, reset_tracker
 from object_detection import detect_objects
@@ -20,13 +25,27 @@ from task_detection import (
     ACTION_LABELS,
 )
 
-# STUN Servers for robust WebRTC handshaking
+# STUN + Free OpenRelay TURN servers for firewall and mobile CGNAT bypass
 RTC_CONFIG = RTCConfiguration(
     {
         "iceServers": [
             {"urls": ["stun:stun.l.google.com:19302"]},
             {"urls": ["stun:stun1.l.google.com:19302"]},
-            {"urls": ["stun:stun2.l.google.com:19302"]},
+            {
+                "urls": ["turn:openrelay.metered.ca:80"],
+                "username": "openrelayproject",
+                "credential": "openrelayproject",
+            },
+            {
+                "urls": ["turn:openrelay.metered.ca:443"],
+                "username": "openrelayproject",
+                "credential": "openrelayproject",
+            },
+            {
+                "urls": ["turn:openrelay.metered.ca:443?transport=tcp"],
+                "username": "openrelayproject",
+                "credential": "openrelayproject",
+            },
         ]
     }
 )
@@ -73,11 +92,11 @@ class LiveCameraProcessor(VideoProcessorBase):
         try:
             img = frame.to_ndarray(format="bgr24")
 
-            # Downscale frame to prevent CPU overload on cloud server
+            # Optimize resolution for cloud performance
             h, w = img.shape[:2]
-            if w > 640:
-                scale = 640.0 / w
-                img = cv2.resize(img, (640, int(h * scale)))
+            if w > 480:
+                scale = 480.0 / w
+                img = cv2.resize(img, (480, int(h * scale)))
 
             # 1. Pose Analysis
             detected_frame, persons = analyze_frame(img)
@@ -88,7 +107,7 @@ class LiveCameraProcessor(VideoProcessorBase):
             self.object_count = len(objects)
             detected_frame = draw_object_boxes(detected_frame, objects)
 
-            # 3. Sequential Step Evaluation
+            # 3. Sequential Step Validation
             if self.persons:
                 main_p = self.persons[0]
                 self.latest_activity = main_p.get("activity", "Unknown")
@@ -105,13 +124,12 @@ class LiveCameraProcessor(VideoProcessorBase):
 
             return av.VideoFrame.from_ndarray(detected_frame, format="bgr24")
 
-        except Exception as e:
-            # Prevents entire WebRTC stream from crashing on any frame drop
+        except Exception:
             return frame
 
 
 # ============================================================
-# 📷 1. MAIN CAMERA / VIDEO PROCESSING
+# 📷 1. MAIN CAMERA VIEW
 # ============================================================
 def show_camera():
     st.subheader("📷 Camera & Video Source")
@@ -130,13 +148,14 @@ def show_camera():
 
         ctx = webrtc_streamer(
             key="webrtc-stream-main",
+            mode=WebRtcMode.SENDRECV,
             video_processor_factory=LiveCameraProcessor,
             rtc_configuration=RTC_CONFIG,
             media_stream_constraints={
                 "video": {
-                    "width": {"ideal": 640},
-                    "height": {"ideal": 480},
-                    "frameRate": {"ideal": 20, "max": 25},
+                    "width": {"ideal": 480},
+                    "height": {"ideal": 360},
+                    "frameRate": {"ideal": 15, "max": 20},
                 },
                 "audio": False,
             },
@@ -145,7 +164,6 @@ def show_camera():
 
         st.divider()
 
-        # Metrics display
         c1, c2, c3, c4 = st.columns(4)
         with c1:
             act_metric = st.empty()
@@ -203,7 +221,6 @@ def show_camera():
             obj_metric.metric("Detected Objects", "—")
 
     else:
-        # Fallback file uploader
         uploaded_video = st.file_uploader(
             "Upload action video (.mp4, .mov, .avi)",
             type=["mp4", "mov", "avi", "mkv"],
@@ -247,9 +264,9 @@ def show_camera():
                 break
 
             h, w = frame.shape[:2]
-            if w > 640:
-                scale = 640.0 / w
-                frame = cv2.resize(frame, (640, int(h * scale)))
+            if w > 480:
+                scale = 480.0 / w
+                frame = cv2.resize(frame, (480, int(h * scale)))
 
             detected_frame, persons = analyze_frame(frame)
             _, objects = detect_objects(detected_frame)
