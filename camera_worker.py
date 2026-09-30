@@ -193,13 +193,13 @@ class CameraWorker:
     # ------------------------------------------------------------
 
     def _run(self):
-        # Capture pacing (best effort — some mobile streams ignore it)
-        try:
-            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAPTURE_WIDTH)
-            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAPTURE_HEIGHT)
-            self._cap.set(cv2.CAP_PROP_FPS, CAPTURE_FPS)
-        except Exception:
-            pass
+        # NOTE: the capture's set() warmup is NOT done here. On Windows
+        # (DirectShow), calling set() from a different thread than the
+        # one that OPENED the device corrupts the capture graph — every
+        # subsequent read() then fails and the camera reports lost
+        # (verified: open+set cross-thread = 0/15 reads; same thread =
+        # 15/15). The warmup therefore runs at open time in
+        # camera._task_camera, on the same thread that opened the cap.
 
         cap_interval = 1.0 / CAPTURE_FPS
         pose_interval = 1.0 / POSE_INFERENCE_FPS

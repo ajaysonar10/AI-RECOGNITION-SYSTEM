@@ -10,12 +10,6 @@ from camera_worker import (
     empty_task_result,
 )
 
-# Web deployment: browser-camera ingest (optional module — the
-# desktop/localhost flow must keep working even if it is absent)
-try:
-    import web_camera
-except ImportError:
-    web_camera = None
 from task_detection import (
     TaskVerificationSession,
     parse_task_text,
@@ -1150,6 +1144,24 @@ def _show_verdict(verdict, evaluator):
 # ============================================================
 
 
+def _apply_capture_profile(cap):
+    """
+    Applies the capture resolution/FPS profile.
+
+    MUST run on the SAME thread that opened the VideoCapture: on
+    Windows/DirectShow a set() from another thread corrupts the
+    capture graph and every read() fails afterwards (the camera
+    immediately reports lost). The camera_worker therefore does NOT
+    call set() — this warmup happens right here at open time.
+    """
+    try:
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        cap.set(cv2.CAP_PROP_FPS, 15.0)
+    except Exception:
+        pass   # best effort — mobile streams may ignore it
+
+
 def _task_camera(cap_type):
     """Opens the existing camera sources (laptop or mobile)."""
 
@@ -1172,7 +1184,12 @@ def _task_camera(cap_type):
             f"http://{mobile_ip}:{port}/video"
         )
 
-    return cap if (cap is not None and cap.isOpened()) else None
+    if cap is not None and cap.isOpened():
+        # Same-thread warmup (see _apply_capture_profile) — REQUIRED,
+        # a cross-thread set() in the worker breaks reads on Windows.
+        _apply_capture_profile(cap)
+        return cap
+    return None
 
 
 def _render_task_status(task_session, result, object_context=None):
@@ -1532,29 +1549,9 @@ def show_task_verification():
 
     st.subheader("📷 Camera Source")
 
-    _cam_sources = ["Laptop Camera", "Connect with Mobile"]
-    if web_camera is not None:
-        _cam_sources.append("🌐 Web Browser Camera")
-
-    # On the public deployment there IS no server webcam — visitors
-    # use their own device camera through the browser, so make that
-    # the default source there. Localhost keeps Laptop Camera.
-    _default_source = "Laptop Camera"
-    try:
-        _host = st.context.headers.get("host", "")
-        _on_public_host = bool(_host) and not (
-            _host.startswith("localhost")
-            or _host.startswith("127.0.0.1")
-        )
-        if web_camera is not None and _on_public_host:
-            _default_source = "🌐 Web Browser Camera"
-    except Exception:
-        pass
-
     camera_type = st.radio(
         "Select Camera Source",
-        _cam_sources,
-        index=_cam_sources.index(_default_source),
+        ["Laptop Camera", "Connect with Mobile"],
         horizontal=True,
         key="tv_camera_type"
     )
@@ -1573,26 +1570,6 @@ def show_task_verification():
             value=int(st.session_state.get("tv_port", 8080)),
             key="tv_port_input"
         )
-
-    if (
-        camera_type == "🌐 Web Browser Camera"
-        and web_camera is not None
-        and st.session_state.tv_cam_on
-    ):
-        _sid = st.context.session_id
-        web_camera.render_web_camera(_sid)
-        _wb = web_camera.get_buffer(_sid)
-        if _wb.stats()["age"] >= 0 and not _wb.isOpened():
-            st.error(
-                "⚠️ Camera stream stopped — the browser stopped "
-                "sending frames. Double-click the camera preview "
-                "to retry."
-            )
-        elif _wb.stats()["age"] > 1.5:
-            st.warning(
-                "Waiting for browser frames… if nothing appears, "
-                "check the permission prompt in your browser."
-            )
 
     # ----------------------------------------------
     # ACTION BUTTONS
@@ -1624,6 +1601,7 @@ def show_task_verification():
             )
 
     if start_cam_pressed:
+        print("[TV] START CAMERA pressed — turning camera on", flush=True)
         st.session_state.tv_cam_on = True
         # fresh monitor state (trackers reset — naya session)
         st.session_state.task_session = None
@@ -1753,6 +1731,20 @@ def show_task_verification():
 
         detection_placeholder = st.empty()
 
+    # CAMERA ERROR FIX (StreamlitInvalidLayoutContextError):
+    # a fragment may only write to external containers that were
+    # WRITTEN TO during the full app run. The live loop below can
+    # return early ("snapshot is None") while the worker is still
+    # starting, leaving e.g. frame_placeholder unclaimed — the first
+    # fragment rerun then crashed on frame_placeholder.image().
+    # Claim every slot once here; the fragment fills them after.
+    status_placeholder.info("Camera: ⚪ starting…")
+    frame_placeholder.info("Waiting for the first camera frame…")
+    activity_metric.metric("Activity", "—")
+    streak_metric.metric("Confirmation", "—")
+    progress_metric.metric("Progress", "0%")
+    detection_placeholder.info("🤖 AI engine starting…")
+
     # ==================================================
     # LAG FIX: the whole live section below is a FRAGMENT.
     # Only it re-runs (~4 Hz); the rest of the page (buttons,
@@ -1775,19 +1767,9 @@ def show_task_verification():
 
 def _tv_open_camera(camera_kind):
     """
-    Opens the right camera for the selected source.
-
-    - "Laptop Camera" / "Connect with Mobile" -> cv2.VideoCapture
-      (server-side device, exactly like before)
-    - "🌐 Web Browser Camera" -> WebVideoStream (frames uploaded
-      from the visitor's browser through /_basai/frame)
+    Opens the selected camera source (laptop webcam or mobile
+    IP-stream) as a cv2.VideoCapture.
     """
-
-    if camera_kind == "🌐 Web Browser Camera":
-        if web_camera is None:
-            return None
-        return web_camera.WebVideoStream(st.context.session_id)
-
     return _task_camera(camera_kind)
 
 
@@ -1808,7 +1790,7 @@ def _tv_render_live_frame(
 
     worker = CameraWorker.get_active()
 
-    # Which source is active (laptop/mobile device vs browser cam)
+    # Which source is active (laptop/mobile device)
     camera_kind = st.session_state.get(
         "tv_camera_type", "Laptop Camera"
     )
@@ -1824,8 +1806,8 @@ def _tv_render_live_frame(
             or st.session_state.get("tv_cap_kind") != camera_kind
         ):
             if cap is not None:
-                # Source switched (e.g. laptop -> web browser): the
-                # old device must be closed before opening the new one.
+                # Source switched (e.g. laptop -> mobile): the old
+                # device must be closed before opening the new one.
                 try:
                     cap.release()
                 except Exception:
@@ -1835,20 +1817,21 @@ def _tv_render_live_frame(
             cap = _tv_open_camera(camera_kind)
 
             if cap is None:
-                if camera_kind == "🌐 Web Browser Camera":
-                    status_placeholder.error(
-                        "❌ Browser camera could not start — allow "
-                        "the permission prompt, then STOP + START "
-                        "the camera."
-                    )
-                else:
-                    status_placeholder.error(
-                        "❌ Camera could not be opened — the server "
-                        "has no webcam. Select **🌐 Web Browser "
-                        "Camera** above to use your device camera."
-                    )
+                print(
+                    f"[TV] camera open FAILED (source={camera_kind})",
+                    flush=True,
+                )
+                status_placeholder.error(
+                    "❌ Camera could not be opened. Check the camera "
+                    "connection, then press STOP + START CAMERA."
+                )
                 return
 
+            print(
+                f"[TV] camera opened OK (source={camera_kind}) — "
+                "starting worker",
+                flush=True,
+            )
             st.session_state.tv_cap = cap
             st.session_state.tv_cap_kind = camera_kind
 
@@ -1864,6 +1847,8 @@ def _tv_render_live_frame(
             camera_kind,
             on_camera_lost=_tv_on_camera_lost,
         )
+        if _started:
+            print("[TV] worker started", flush=True)
 
     # ----------------------------------------------
     # LIVE STATE SYNC (UI decisions -> worker inputs)
@@ -1909,6 +1894,11 @@ def _tv_render_live_frame(
     # ----------------------------------------------
 
     if not shared.running or shared.camera_lost:
+        print(
+            f"[TV] camera LOST flag (running={shared.running}, "
+            f"lost={shared.camera_lost}) — releasing",
+            flush=True,
+        )
         release_task_camera()
         st.session_state.tv_running = False
         st.session_state.tv_camera_lost = True
@@ -2097,13 +2087,6 @@ def release_task_camera():
     # Lag fix: the camera device belongs to the ONE background
     # worker now — stopping it must join + release through there.
     stop_active_worker()
-
-    # Web mode: also close the browser-frame buffer for THIS session
-    if web_camera is not None:
-        try:
-            web_camera.drop_buffer(st.context.session_id)
-        except Exception:
-            pass
 
     st.session_state.pop("tv_cap", None)
     st.session_state.pop("tv_cap_kind", None)

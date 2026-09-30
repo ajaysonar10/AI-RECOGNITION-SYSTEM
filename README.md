@@ -60,7 +60,7 @@ with everything needed: `Dockerfile`, `.streamlit/config.toml`,
    git add . && git commit -m "BAS-AI initial deployment" && git push
    ```
    Required files: `app.py`, `camera.py`, `camera_worker.py`,
-   `web_camera.py`, `run_app.py`, `pose_detection.py`,
+   `run_app.py`, `pose_detection.py`,
    `object_detection.py`, `object_tracking.py`, `object_tasks.py`,
    `task_detection.py`, `step_validator.py`, `live_task_suite.py`,
    `task_eval.py`, `requirements.txt`, `Dockerfile`,
@@ -88,33 +88,25 @@ with everything needed: `Dockerfile`, `.streamlit/config.toml`,
 > accessible** — complete steps 1–5 above, then verify per the
 > checklist below.
 
-### Using the camera from the browser (public visitors)
+### Camera sources
 
-- Camera source **🌐 Web Browser Camera** is the default on the public
-  URL (localhost keeps **Laptop Camera** by default).
-- The browser asks for **camera permission** once, over HTTPS. Denying
-  it shows a retry hint instead of breaking the app.
-- Browser frames are downscaled to 640 px and uploaded to
-  `/_basai/frame` (~12 FPS); the same YOLO pose/object pipeline,
-  tracking and task verification runs on them unchanged.
-- Users can revoke permission at any time via the browser address bar;
-  the app shows a stopped-stream warning with a retry hint.
+- **Laptop Camera** — the server's own webcam (default).
+- **Connect with Mobile** — an IP webcam app on the same Wi-Fi
+  network (enter the phone's IP + port).
+- There is no browser-camera source: the pipeline reads directly
+  from `cv2.VideoCapture` (device 0 or the mobile stream URL).
 
 ---
 
 ## 🏗️ Architecture
 
 ```
-Browser (HTTPS)                      Container (HF Space / Docker)
+cv2.VideoCapture                      Container (HF Space / Docker)
 ┌─────────────────────────┐          ┌────────────────────────────────┐
-│ getUserMedia → canvas   │  JPEG    │ Starlette route POST           │
-│ → JPEG (640px, ~12fps)  │ ───────► │ /_basai/frame                  │
-└─────────────────────────┘          │   → session frame buffer       │
-                                     │        ↓                       │
-localhost: cv2.VideoCapture ───────► │ camera_worker.CameraWorker     │
-                                     │  (reader + throttled YOLO)     │
-                                     │   pose YOLO ~10fps             │
-                                     │   object YOLO ~7fps (opt-in)   │
+│ laptop webcam (device 0) │          │ camera_worker.CameraWorker     │
+│        — or —            │ ───────► │  (reader + throttled YOLO)     │
+│ mobile IP webcam stream  │          │   pose YOLO ~10fps             │
+└─────────────────────────┘          │   object YOLO ~7fps (opt-in)   │
                                      │        ↓                       │
                                      │ task verification + tracking   │
                                      │        ↓                       │
@@ -126,8 +118,7 @@ Key files:
 
 | File | Role |
 |---|---|
-| `run_app.py` | production launcher: `st.App` + ingest/health routes (uvicorn) |
-| `web_camera.py` | browser capture component + session frame buffers |
+| `run_app.py` | production launcher: `st.App` + health route (uvicorn) |
 | `camera_worker.py` | single background inference worker per session |
 | `camera.py` | Live Monitor UI, camera sources, task verification |
 | `task_detection.py` / `object_tasks.py` | task logic (never fakes results) |

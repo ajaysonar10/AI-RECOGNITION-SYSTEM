@@ -74,8 +74,8 @@ def _render_share_section():
             )
 
         st.caption(
-            "Camera permission is requested in the browser when a "
-            "task is started with the 🌐 Web Browser Camera source."
+            "Camera permission is requested by the server when a "
+            "task is started with the Laptop Camera source."
         )
 
 

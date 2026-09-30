@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
         --index-url https://download.pytorch.org/whl/cpu
 
 # App code + the two YOLO weights (committed to the repo by choice)
-COPY app.py camera.py camera_worker.py web_camera.py run_app.py \
+COPY app.py camera.py camera_worker.py run_app.py \
      pose_detection.py object_detection.py object_tracking.py \
      object_tasks.py task_detection.py step_validator.py \
      live_task_suite.py task_eval.py \

@@ -6,11 +6,8 @@ Production launcher for BAS-AI (public deployment).
 
 Why this file exists:
     `streamlit run app.py` stays the developer flow for localhost.
-    For the public deployment we need ONE extra HTTP endpoint
-    (POST /_basai/frame) so browser cameras can upload frames to
-    the server. Streamlit 1.63's official `st.App` API accepts
-    custom Starlette routes, and uvicorn serves the whole thing
-    under one port/origin — HTTPS on the public URL comes from the
+    For the public deployment we serve the app through uvicorn under
+    one port/origin — HTTPS on the public URL comes from the
     platform's proxy (HF Spaces terminates TLS in front of the
     container).
 
@@ -29,8 +26,6 @@ import uvicorn
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from web_camera import ROUTE_PATH, make_frame_route
-
 # Public URL override (used by the Share section + QR code).
 # Set it to the final public URL in the platform's settings once
 # known; empty = the app falls back to browser-detected origin.
@@ -48,7 +43,6 @@ def build_app() -> "st.App":
     return st.App(
         script,
         routes=[
-            Route(ROUTE_PATH, make_frame_route(), methods=["POST"]),
             Route("/health", health, methods=["GET"]),
         ],
     )
