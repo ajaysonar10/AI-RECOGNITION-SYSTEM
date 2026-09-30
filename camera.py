@@ -4,7 +4,8 @@ import cv2
 import streamlit as st
 import time
 from datetime import datetime
-import pyttsx3
+import tempfile
+import os
 import av
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
 
@@ -19,9 +20,15 @@ from task_detection import (
     ACTION_LABELS,
 )
 
-# STUN Server (Cloud par smoothly video stream karne ke liye)
+# STUN Servers for robust WebRTC handshaking
 RTC_CONFIG = RTCConfiguration(
-    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+    {
+        "iceServers": [
+            {"urls": ["stun:stun.l.google.com:19302"]},
+            {"urls": ["stun:stun1.l.google.com:19302"]},
+            {"urls": ["stun:stun2.l.google.com:19302"]},
+        ]
+    }
 )
 
 OBJECT_BOX_COLOR = (0, 200, 255)
@@ -37,16 +44,20 @@ def draw_object_boxes(frame, objects):
         cv2.rectangle(frame, p1, p2, OBJECT_BOX_COLOR, 2)
         label_y = max(p1[1] - 6, 14)
         cv2.putText(
-            frame, label, (p1[0], label_y),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-            OBJECT_BOX_COLOR, 1, cv2.LINE_AA,
+            frame,
+            label,
+            (p1[0], label_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            OBJECT_BOX_COLOR,
+            1,
+            cv2.LINE_AA,
         )
     return frame
 
 
 # ============================================================
-# 🎥 LIVE WEBRTC AI PROCESSOR
-# (Har ek frame direct browser se aayega aur process hoga)
+# 🎥 CRASH-PROOF WEBRTC AI PROCESSOR
 # ============================================================
 class LiveCameraProcessor(VideoProcessorBase):
     def __init__(self):
@@ -55,101 +66,204 @@ class LiveCameraProcessor(VideoProcessorBase):
         self.latest_confidence = 0.0
         self.object_count = 0
         self.step_status = "WAITING"
-        self.step_message = "Waiting for person..."
+        self.step_message = "Waiting for detection..."
         self.persons = []
 
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
-        img = frame.to_ndarray(format="bgr24")
+        try:
+            img = frame.to_ndarray(format="bgr24")
 
-        # 1. Pose Analysis
-        detected_frame, persons = analyze_frame(img)
-        self.persons = persons
+            # Downscale frame to prevent CPU overload on cloud server
+            h, w = img.shape[:2]
+            if w > 640:
+                scale = 640.0 / w
+                img = cv2.resize(img, (640, int(h * scale)))
 
-        # 2. Object Detection
-        _, objects = detect_objects(detected_frame)
-        self.object_count = len(objects)
-        detected_frame = draw_object_boxes(detected_frame, objects)
+            # 1. Pose Analysis
+            detected_frame, persons = analyze_frame(img)
+            self.persons = persons or []
 
-        # 3. Step & Activity Logic
-        if persons:
-            main_p = persons[0]
-            self.latest_activity = main_p["activity"]
-            self.latest_confidence = main_p["confidence"]
+            # 2. Object Detection
+            _, objects = detect_objects(detected_frame)
+            self.object_count = len(objects)
+            detected_frame = draw_object_boxes(detected_frame, objects)
 
-            res = self.step_validator.check_activity(self.latest_activity)
-            self.step_status = res["status"]
-            self.step_message = res["message"]
-        else:
-            self.latest_activity = "No Person"
-            self.latest_confidence = 0.0
-            self.step_status = "WAITING"
-            self.step_message = "Person not detected."
+            # 3. Sequential Step Evaluation
+            if self.persons:
+                main_p = self.persons[0]
+                self.latest_activity = main_p.get("activity", "Unknown")
+                self.latest_confidence = float(main_p.get("confidence", 0.0))
 
-        return av.VideoFrame.from_ndarray(detected_frame, format="bgr24")
+                res = self.step_validator.check_activity(self.latest_activity)
+                self.step_status = res.get("status", "WAITING")
+                self.step_message = res.get("message", "")
+            else:
+                self.latest_activity = "No Person"
+                self.latest_confidence = 0.0
+                self.step_status = "WAITING"
+                self.step_message = "No person detected in frame."
+
+            return av.VideoFrame.from_ndarray(detected_frame, format="bgr24")
+
+        except Exception as e:
+            # Prevents entire WebRTC stream from crashing on any frame drop
+            return frame
 
 
 # ============================================================
-# 📷 1. MAIN LIVE CAMERA VIEW
+# 📷 1. MAIN CAMERA / VIDEO PROCESSING
 # ============================================================
 def show_camera():
-    st.subheader("📷 Live Hardware Camera (Laptop / Mobile)")
-    st.caption("Browser camera permission maangega — use **Allow** karein.")
+    st.subheader("📷 Camera & Video Source")
 
-    ctx = webrtc_streamer(
-        key="main-live-cam",
-        video_processor_factory=LiveCameraProcessor,
-        rtc_configuration=RTC_CONFIG,
-        media_stream_constraints={"video": True, "audio": False},
-        async_processing=True,
+    source_type = st.radio(
+        "Select Source",
+        ["Live Device Camera (WebRTC)", "Upload Recorded Video (.mp4)"],
+        horizontal=True,
+        key="main_source_selection",
     )
 
-    st.divider()
+    if source_type == "Live Device Camera (WebRTC)":
+        st.caption(
+            "Click **START** below. When prompted, select **Allow** for browser camera permissions."
+        )
 
-    c1, c2, c3, c4 = st.columns(4)
-    with c1: act_box = st.empty()
-    with c2: conf_box = st.empty()
-    with c3: sys_box = st.empty()
-    with c4: obj_box = st.empty()
+        ctx = webrtc_streamer(
+            key="webrtc-stream-main",
+            video_processor_factory=LiveCameraProcessor,
+            rtc_configuration=RTC_CONFIG,
+            media_stream_constraints={
+                "video": {
+                    "width": {"ideal": 640},
+                    "height": {"ideal": 480},
+                    "frameRate": {"ideal": 20, "max": 25},
+                },
+                "audio": False,
+            },
+            async_processing=True,
+        )
 
-    st.subheader("🎯 Sequential Step Evaluation")
-    s1, s2, s3 = st.columns(3)
-    with s1: step_name_box = st.empty()
-    with s2: step_status_box = st.empty()
-    with s3: step_msg_box = st.empty()
+        st.divider()
 
-    st.subheader("👤 Person Justification")
-    analysis_box = st.empty()
+        # Metrics display
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            act_metric = st.empty()
+        with c2:
+            conf_metric = st.empty()
+        with c3:
+            sys_metric = st.empty()
+        with c4:
+            obj_metric = st.empty()
 
-    if ctx.video_processor:
-        proc = ctx.video_processor
-        act_box.metric("Activity", proc.latest_activity)
-        conf_box.metric("Confidence", f"{proc.latest_confidence:.1f}%")
-        sys_box.metric("System", "LIVE 🟢" if ctx.state.playing else "PAUSED")
-        obj_box.metric("Objects", proc.object_count)
+        st.subheader("🎯 Step Validation Status")
+        s1, s2, s3 = st.columns(3)
+        with s1:
+            step_name_box = st.empty()
+        with s2:
+            step_status_box = st.empty()
+        with s3:
+            step_msg_box = st.empty()
 
-        curr_step = proc.step_validator.get_current_step()
-        step_name_box.metric("Current Step", curr_step or "COMPLETED")
+        st.subheader("👤 Detection Reasoning & Person Analysis")
+        analysis_box = st.empty()
 
-        if proc.step_status == "CORRECT":
-            step_status_box.success("✅ CORRECT")
-        elif proc.step_status == "WRONG":
-            step_status_box.error("❌ WRONG")
-        else:
-            step_status_box.info("⏳ WAITING")
-
-        step_msg_box.write(proc.step_message)
-
-        if proc.persons:
-            p = proc.persons[0]
-            reasons = "\n".join(f"• {r}" for r in p["justification"])
-            analysis_box.markdown(
-                f"**Activity:** `{p['activity']}` | **Position:** {p['position']['description']}\n\n{reasons}"
+        if ctx.video_processor:
+            proc = ctx.video_processor
+            act_metric.metric("Current Activity", proc.latest_activity)
+            conf_metric.metric("Confidence", f"{proc.latest_confidence:.1f}%")
+            sys_metric.metric(
+                "System Status", "ONLINE 🟢" if ctx.state.playing else "PAUSED"
             )
+            obj_metric.metric("Detected Objects", proc.object_count)
+
+            curr_step = proc.step_validator.get_current_step()
+            step_name_box.metric("Current Step", curr_step or "COMPLETED")
+
+            if proc.step_status == "CORRECT":
+                step_status_box.success("✅ CORRECT")
+            elif proc.step_status == "WRONG":
+                step_status_box.error("❌ WRONG")
+            else:
+                step_status_box.info("⏳ WAITING")
+
+            step_msg_box.write(proc.step_message)
+
+            if proc.persons:
+                p = proc.persons[0]
+                reasons = "\n".join(f"- {r}" for r in p.get("justification", []))
+                pos_desc = p.get("position", {}).get("description", "Unknown")
+                analysis_box.markdown(
+                    f"**Activity:** `{p.get('activity')}` | **Position:** {pos_desc}\n\n{reasons}"
+                )
+        else:
+            sys_metric.metric("System Status", "STANDBY ⚪")
+            act_metric.metric("Current Activity", "—")
+            conf_metric.metric("Confidence", "—")
+            obj_metric.metric("Detected Objects", "—")
+
     else:
-        sys_box.metric("System", "OFFLINE ⚪")
-        act_box.metric("Activity", "—")
-        conf_box.metric("Confidence", "—")
-        obj_box.metric("Objects", "—")
+        # Fallback file uploader
+        uploaded_video = st.file_uploader(
+            "Upload action video (.mp4, .mov, .avi)",
+            type=["mp4", "mov", "avi", "mkv"],
+            key="fallback_uploader",
+        )
+
+        col_start, col_stop = st.columns(2)
+        with col_start:
+            start_proc = st.button("🟢 Start Processing", use_container_width=True)
+        with col_stop:
+            stop_proc = st.button("🔴 Stop Processing", use_container_width=True)
+
+        if "video_file_running" not in st.session_state:
+            st.session_state.video_file_running = False
+
+        if stop_proc:
+            st.session_state.video_file_running = False
+            st.rerun()
+
+        if start_proc:
+            if uploaded_video is None:
+                st.error("Please upload a video file first.")
+                return
+            st.session_state.video_file_running = True
+
+        if not st.session_state.video_file_running:
+            st.info("Upload a video and press 🟢 Start Processing.")
+            return
+
+        tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+        tfile.write(uploaded_video.getvalue())
+        tfile.flush()
+
+        cap = cv2.VideoCapture(tfile.name)
+        frame_box = st.empty()
+
+        while st.session_state.video_file_running and cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                st.info("Video processing completed.")
+                break
+
+            h, w = frame.shape[:2]
+            if w > 640:
+                scale = 640.0 / w
+                frame = cv2.resize(frame, (640, int(h * scale)))
+
+            detected_frame, persons = analyze_frame(frame)
+            _, objects = detect_objects(detected_frame)
+            detected_frame = draw_object_boxes(detected_frame, objects)
+
+            frame_box.image(
+                cv2.cvtColor(detected_frame, cv2.COLOR_BGR2RGB),
+                channels="RGB",
+                use_container_width=True,
+            )
+            time.sleep(0.03)
+
+        cap.release()
+        st.session_state.video_file_running = False
 
 
 # ============================================================
@@ -157,7 +271,7 @@ def show_camera():
 # ============================================================
 def show_task_evaluation():
     st.subheader("📝 Live Task Evaluation")
-    st.info("Task evaluation is active on the live stream. Perform tasks directly in front of the camera.")
+    st.info("Task evaluation is running on the continuous monitoring pipeline.")
     show_camera()
 
 
@@ -166,5 +280,4 @@ def show_task_evaluation():
 # ============================================================
 def show_task_verification():
     st.subheader("✅ Live Task Verification")
-    st.caption("Live Camera se task verify karne ke liye niche **START** dabayein:")
     show_camera()
