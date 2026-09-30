@@ -2,7 +2,7 @@
 # against (Python 3.14 dev env; the container uses 3.11-slim).
 streamlit==1.63.0
 ultralytics==8.4.149
-opencv-python==5.0.0.93
+opencv-python-headless
 numpy==2.5.3
 pandas==3.0.5
 pillow==12.3.0
