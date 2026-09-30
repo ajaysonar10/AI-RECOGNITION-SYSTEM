@@ -12,6 +12,8 @@ requests==2.34.2
 
 # Production launcher (st.App + custom ingest routes)
 uvicorn==0.52.4
+streamlit-webrtc
+av
 
 # Torch is pulled in by ultralytics automatically; pinned only if the
 # platform resolver needs it. Do NOT add torch>=3 lines here — the
